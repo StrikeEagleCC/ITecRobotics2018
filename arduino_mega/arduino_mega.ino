@@ -1,9 +1,11 @@
+#include <ODriveArduino.h>
 #include <PS3BT.h>
+#include <XYZrobotServo.h>
 #include <usbhub.h> //in case the bluetooth dongle has a hub
 #include <math.h>  //for trig functions
-#include <Servo.h>  //for servo control
-#include <QTRSensors.h>
 
+
+/*~~~~~~~~~~~~~~~~~~ USB SHIELD AND DONGLE SETUP ~~~~~~~~~~~~~~~~~~~~*/
 // Satisfy the IDE, which needs to see the include statment in the ino too.
 #ifdef dobogusinclude
 #include <spi4teensy3.h>
@@ -16,94 +18,71 @@ USB Usb;
 BTD Btd(&Usb); // create the Bluetooth Dongle instance
 PS3BT PS3(&Btd, 0x00, 0x19, 0x0E, 0x18, 0xBC, 0xC3); // This is the dongles adress. It will change with different dongles.
 
-Servo armBase0;
-Servo armBase1;
-Servo armMid;
-Servo gripper;
 
-#define NUM_SENSORS   4     // number of sensors used
-#define TIMEOUT       1500  // waits for 2500 microseconds for sensor outputs to go low
-#define EMITTER_PIN   31     // emitter is controlled by digital pin 36
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~ ODRIVE SETUP ~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+// Printing with stream operator
+template<class T> inline Print& operator <<(Print &obj,     T arg) { obj.print(arg);    return obj; }
+template<>        inline Print& operator <<(Print &obj, float arg) { obj.print(arg, 4); return obj; }
 
-// sensors 0 through 6 are connected to digital pins 30 through 35, respectively
-QTRSensorsRC qtrrc((unsigned char[]) {33, 32, 35, 34},
-  NUM_SENSORS, TIMEOUT, EMITTER_PIN); 
-unsigned int sensorValues[NUM_SENSORS];
+#define odrive_serial Serial3
+
+// ODrive object
+ODriveArduino odrive(odrive_serial);
 
 
-/*Pinout  
- *!!CRITICAL!! This pinout only works if servoTimers.h in the servo library is modified to prioritizetimer 1
- *over timer 5. Compiling with the default servo library will disable pwm control for the motors on pins 44-46.
- */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~ SERVO SETUP ~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+#define servo_serial Serial2
 
-int const battSense = A0;  //pin for sensing battery voltage on a voltage divider. !!Potential for damage to board if divider is not configured correctly. We should get a ~5V zener to clamp the voltage to a safe level if we're worried about it.
-int const enA=44;   //Lt wheel PWM
-int const in1=42;   //Lt wheel forward enable
-int const in2=40;   //Lt wheel reverse enable
-int const enB=45;   //Rt wheel PWM
-int const in4=43;   //Rt wheel reverse enable
-int const in3=41;   //Rt wheel forward enable
-int const liftEnA= 50;
-int const liftIn1 = 46;
-int const liftIn2 = 48;
-int const armBase0Enable = 28;
-int const armBase1Enable = 26;
-int const armMidEnable = 24;
-int const gripperEnable = 22;
-int const armBase0Pin = 29;
-int const armBase1Pin = 27; //if 2 servos are used on the base
-int const armMidPin = 25;
-int const gripperPin = 23;
-int const limSwA = 20;
-int const limSwB = 21;
-int const battLED0 = 12;
-int const battLED1 = 11;
-int const connectLED = 7;
-int const calibrateLED = 6;
-int const lineAcqLt = 5;
-int const lineAcqLtLow = 4;
-int const lineAcqRt = 3;
-int const lineAcqRtLow = 2;
-int const touchSw = 38;
-int const touchSwLow = 39;
-//check the sensor declaration for sensor pin numbers
+// Servo objects
+XYZrobotServo armBase(servo_serial, 1);
+XYZrobotServo armMid(servo_serial, 2);
+XYZrobotServo wrist(servo_serial, 3);
+XYZrobotServo gripper(servo_serial, 4);
 
-//Controller settings
+
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ PINOUT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+int const battSense = A0;
+int const battLED = 6;
+int const BTconnectLED = 7;
+int const shutdownPin = 8;
+
+/*~~~~~~~~~~~~~~~~~~~~~~ CONTROLLER SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~*/
 int ltAnalogXDeadZone = 10;  //set deazone ranges each axis on each stick. Values will probably be less than 10
 int ltAnalogYDeadZone = 10;
 int rtAnalogXDeadZone = 10;
 int rtAnalogYDeadZone = 10;
 int analogL2DeadZone = 0;
 int analogR2DeadZone = 0;
-float ltAnalogXScaler = .6;  //scales down the input from the axes. Values range from 0-1
+float ltAnalogXScaler = 1;  //scales down the input from the axes. Values range from 0-1
 float ltAnalogYScaler = 1;
 float rtAnalogXScaler = 1;
 float rtAnalogYScaler = 1;
 float analogL2Scaler = 1;
 float analogR2Scaler = 1;
 
-//Driving settings
+
+/*~~~~~~~~~~~~~~~~~~~~~~~~ DRIVING SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~*/
 int steeringTrim = 0; //sets trim for steering in degrees, negative for left bias, positive for right bias
 float throttleScale = 1.4142; //scales velocity vector. Range: 0-1.4142 (sqrt(2)). Values greater than 1.4142 will have no effect other than reducing control resolution.
-int brakePower = 255;  //sets aggressiveness of braking. values are between 0 (no braking) and 255 (full brakes)
 float steerAdapt = .1; //sets the  adaptive steering. Range: 0-1. Higher values will reduce turning response at higher speeds.
 
-//Servo settings
-boolean armBase0Invert = true;
-boolean armBase1Invert = false;
-boolean armMidInvert = false;
-boolean gripperInvert = false;
-int armBase0Trim = 0;  //adjust trim of each base servo to get them to agree. Units are 1/100th of a degree.
-int armBase1Trim = -100;
-int servoMinus = 550;  //test servos to determine the length of pulse necessary for the extents of range
-int servoMaxus = 2390; //the Servo.h library by default limits these values to 544 and 2400, respectively
+//need to add acceleration values, not sure how to implment them yet
 
-//Batery Level Sensing
+
+/*~~~~~~~~~~~~~~~~~~~~~~~~~ SERVO SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+boolean armBaseInvert = true;
+boolean armMidInvert = false;
+boolean armWristInvert = false;
+boolean gripperInvert = false;
+
+
+/*~~~~~~~~~~~~~~~~~~~~~~~~ BATTERY SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~*/
 int battWarn1 = 661;  //level for first warning, sized for a 15K/6.8K divider. Specific values should be measured and tested with final setup
 int battWarn2 = 623;  //level for second warning
 int battCritical = 572; 
 
-//initialize controller buttons/axis
+
+/*~~~~~~~~~~~~ VARIABLE DECLARATIONS AND INITIALIZATIONS ~~~~~~~~~~~~*/
 int ltAnalogX = 127;
 int ltAnalogY = 127;
 int rtAnalogX = 127;
@@ -130,9 +109,8 @@ boolean armToHome = false;
 boolean armHome = true;
 boolean armReady = false;
 boolean autoMode = false;
-boolean ctlRev = false;
 
-int armBaseAngle = 0; //These hold values of 0-27000, or 0-270x100, for better control resolution and avoiding floating math.
+int armBaseAngle = 0;
 int armMidAngle = 0;
 int gripperAngle = 0;
 int armBasePos = 0;
@@ -148,139 +126,88 @@ void setup() {
     while(!Serial); //Wait for serial port to connect - used on Leonardo, Teensy, and otehr boards with built in USB CDC serial connection
     //^^^is this necessary for arduino then?
   #endif
-  if (Usb.Init() == -1) {  //presumably, this if statement stops the boot if something doesnt start.
-    Serial.print(F("\r\nOSC did not start"));  //what is the "F" in the argument here? and what is \nOSC?
-    while (1); //halt  //is the purpose of this just to hang the board if the usb device isn't initialized?
-  }
+//  if (Usb.Init() == -1) {  //presumably, this if statement stops the boot if something doesnt start.
+//    Serial.print(F("\r\nOSC did not start"));  //what is the "F" in the argument here? and what is \nOSC?
+//    while (1); //halt  //is the purpose of this just to hang the board if the usb device isn't initialized?
+//  }
   Serial.println(F("\r\nPS3 Bluetooth Library Started"));
 
-  pinMode(enA, OUTPUT);
-  pinMode(enB, OUTPUT);
-  pinMode(in1, OUTPUT);
-  pinMode(in2, OUTPUT);
-  pinMode(in3, OUTPUT);
-  pinMode(in4, OUTPUT);
-  pinMode(liftEnA, OUTPUT);
-  digitalWrite(liftEnA, HIGH);
-  pinMode(liftIn1, OUTPUT);
-  pinMode(liftIn2, OUTPUT);
-  digitalWrite(liftIn1, HIGH);
-  digitalWrite(liftIn2, HIGH);
-  pinMode(battLED0, OUTPUT);
-  pinMode(battLED1, OUTPUT);
-  pinMode(connectLED, OUTPUT);
-  pinMode(calibrateLED, OUTPUT);
-  pinMode(lineAcqLt, OUTPUT);
-  pinMode(lineAcqRt, OUTPUT);
-  pinMode(lineAcqLtLow, OUTPUT);
-  pinMode(lineAcqRtLow, OUTPUT);
-  digitalWrite(lineAcqLtLow, LOW);
-  digitalWrite(lineAcqRtLow, LOW);
+  odrive_serial.begin(115200);
+  servo_serial.begin(115200);
 
-  pinMode(touchSw, INPUT_PULLUP);
-  pinMode(touchSwLow, OUTPUT);
-  digitalWrite(touchSwLow, LOW);
+  pinMode(battLED, OUTPUT);
+  pinMode(BTconnectLED, OUTPUT);
+  pinMode(shutdownPin, OUTPUT);
+  digitalWrite(shutdownPin, LOW);
+  
+  battCheck();
 
-  pinMode(limSwA, INPUT_PULLUP);
-  pinMode(limSwB, INPUT_PULLUP);
-  pinMode(armBase0Enable, OUTPUT);
-  pinMode(armBase1Enable, OUTPUT);
-  pinMode(armMidEnable, OUTPUT);
-  pinMode(gripperEnable, OUTPUT);
+  // Calibrate odrive motors
+  int requested_state = ODriveArduino::AXIS_STATE_MOTOR_CALIBRATION;
+  odrive.run_state(0, requested_state, true);
+  odrive.run_state(1, requested_state, true);
+  
+  requested_state = ODriveArduino::AXIS_STATE_ENCODER_OFFSET_CALIBRATION;
+  odrive.run_state(0, requested_state, true);
+  odrive.run_state(1, requested_state, true);
+  
+  odrive_serial << "w axis0.controller.config.control_mode 2\n";
+  odrive_serial << "w axis1.controller.config.control_mode 2\n";
+  delay(10);
+  
+  requested_state = ODriveArduino::AXIS_STATE_CLOSED_LOOP_CONTROL;
+  odrive.run_state(0, requested_state, false);
+  odrive.run_state(1, requested_state, false);
+  
 
-  digitalWrite(armBase0Enable, HIGH);
-  digitalWrite(armBase1Enable, HIGH);
-  digitalWrite(armMidEnable, HIGH);
-  digitalWrite(gripperEnable, HIGH);
-  armBase0.attach(armBase0Pin);
-  armBase1.attach(armBase1Pin);
-  armMid.attach(armMidPin);
-  gripper.attach(gripperPin);
 
-  battCheck();  
-  armToHome = true;
-  armHome = false;
-  armBaseAngle = 0;
-  armMidAngle = 0;
-  gripperAngle = 0;
-  while(!armHome){
-    moveServos(50);  
-  }
-
+  
+  // Wait for PS3 controller to connect
   if (!PS3.PS3Connected){
     Serial.println("Waiting for PS3 controller...");
     unsigned int connectPrevMillis = 0;
     currentMillis = millis();
-    static boolean connectLEDState = true;
-    digitalWrite(connectLED, HIGH);
+    static boolean BTconnectLEDState = true;
+    digitalWrite(BTconnectLED, HIGH);
     while (!PS3.PS3Connected){
       battCheck();
       Usb.Task();
       if(currentMillis - connectPrevMillis > 250) {
-        connectLEDState = !connectLEDState;
-      if(connectLEDState){
+        BTconnectLEDState = !BTconnectLEDState;
+      if(BTconnectLEDState){
       }
-        if(connectLEDState == true){
-          digitalWrite(connectLED, HIGH);
+        if(BTconnectLEDState == true){
+          digitalWrite(BTconnectLED, HIGH);
         }else{
-          digitalWrite(connectLED, LOW);
+          digitalWrite(BTconnectLED, LOW);
         }
         connectPrevMillis = currentMillis;
       }
       //wait for controller to connect
     }
     Serial.println("Controller connected");
-    digitalWrite(connectLED, HIGH); 
+    digitalWrite(BTconnectLED, HIGH); 
   }
+  
+  // Wait for ODrive to come online and calibrate
+  
 }
 
+  
 void loop() {
   Usb.Task();
   battCheck();
   getCtlInputs();
   inputCtlMod();
-  if (tri == true) { //flip which end of the robot is the "front" to simplify driving backwards
-    ctlRev = !ctlRev;
-//    Serial.print("Controls reversed: ");
-//    Serial.println(ctlRev);
-//    Serial.println();
-  }
-  if(psBtn){
-      Serial.print("Calibrating sensor array...");
-    digitalWrite(calibrateLED, HIGH);
-    for(int i = 0; i < 400; i++){
-      qtrrc.calibrate();
-    }
-    Serial.println("done!");
-    digitalWrite(calibrateLED, LOW);
-  }
+
+
   if (start == true && !armHome) {  //engage auto mode!
     autoMode = !autoMode;
   }
   if (autoMode) {
     autoModeCtl();
-  }else {
-    unsigned int position = qtrrc.readLine(sensorValues,true);
-    for(unsigned char i = 0; i < NUM_SENSORS; i++) {
-      if(sensorValues[0] > 800){
-        digitalWrite(lineAcqLt, HIGH);
-      }else{
-        digitalWrite(lineAcqLt, LOW);
-      }
-      if(sensorValues[3] > 800){
-        digitalWrite(lineAcqRt, HIGH);
-      }else{
-        digitalWrite(lineAcqRt, LOW);
-      }
-      
-//      Serial.print(sensorValues[i]);
-//      Serial.print('\t');
-    }
-//    Serial.println(position);
-    
-    liftCtl();
-    armCtl();
   }
+
   driveCtl();
 }
 
@@ -314,55 +241,13 @@ void driveCtl() {
   LWS = (int) ((driveR * sin(steeringTheta))+.5);
   RWS = (int) ((driveR * cos(steeringTheta))+.5);
   
-//  Serial.print("Wheel Speeds prior to mapping: LT: ");
-//  Serial.print(LWS);
-//  Serial.print("\tRT: ");
-//  Serial.println(RWS);
-  
-//set appropriate enable pins for each wheel direction and map input ranges
-  if(LWS>0){
-    LWS = constrain(LWS,0,128); //constrain values to posative side, and clip large values
-    LWS = map(LWS,0,128,0,255); //expand range to appropriate PWM input range
-    digitalWrite(in1,HIGH); //set enable pins for forward movement
-    digitalWrite(in2,LOW);
-    analogWrite(enA,LWS);
-  }else if(LWS < 0){
-    LWS = constrain(LWS,-128,0); //constrain values to negative side, and clip large values
-    LWS = map(LWS,0,-128,0,255); //expand range to appropriate PWM input range
-    digitalWrite(in1,LOW);
-    digitalWrite(in2,HIGH);
-    analogWrite(enA,LWS);
-  }else{
-    digitalWrite(in1,HIGH);  //apply brakes
-    digitalWrite(in2,HIGH);
-    analogWrite(enA,brakePower);
-  }
-  if(RWS>0){
-    RWS = constrain(RWS,0,128); //constrain values to posative side, and clip large values
-    RWS = map(RWS,0,128,0,255); //expand range to appropriate PWM input range
-    digitalWrite(in3,LOW); //set enable pins for forward movement
-    digitalWrite(in4,HIGH);
-    analogWrite(enB,RWS);
-  }else if(RWS < 0){
-    RWS = constrain(RWS,-128,0); //constrain values to negative side, and clip large values
-    RWS = map(RWS,0,-128,0,255); //expand range to appropriate PWM input range
-    digitalWrite(in3,HIGH);
-    digitalWrite(in4,LOW);
-    analogWrite(enB,RWS);
-  }else {
-    digitalWrite(in3,HIGH); //apply brakes
-    digitalWrite(in4,HIGH);
-    analogWrite(enB,brakePower);
-  }
-//  Serial.print("lt: LWS=");
-//  Serial.print(LWS);
-//  Serial.print("\t\trt: RWS=");
-//  Serial.println(RWS);
-//  Serial.println();
-//  Serial.print("Wheel Speed PWM to motors: LT: ");
-//  Serial.print(LWS);
-//  Serial.print("\tRT: ");
-//  Serial.println(RWS);
+  Serial.print("Wheel Speeds prior to mapping: LT: ");
+  Serial.print(LWS);
+  Serial.print("\tRT: ");
+  Serial.println(RWS);
+
+  odrive.SetVelocity(0, LWS);
+  odrive.SetVelocity(1, RWS);
 }
 
 void armCtl() {
@@ -407,61 +292,9 @@ void armCtl() {
 //  Serial.print(armBaseAngle);
 }
 
-void liftCtl() {
-/*This function operates the lift*/
-  if (dPadUp == true) {
-//    Serial.println("Dpad up!");
-    digitalWrite(liftIn1, HIGH);
-    digitalWrite(liftIn2, LOW);   
-  }else if (dPadDown == true) {
-//    Serial.println("Dpad down!");
-    digitalWrite(liftIn1, LOW);
-    digitalWrite(liftIn2, HIGH);
-  }else{
-    digitalWrite(liftIn1, HIGH);
-    digitalWrite(liftIn2, HIGH);
-  }
-}
 
 void autoModeCtl() {
-  if (start) {  //if mode was just changed, stop driving
-    armReady = false;
-    ltAnalogX = 0;
-    ltAnalogY = 0;
-    armBaseAngle = 7680;
-    armMidAngle = 5300;
-  }
-  if(!armReady){
-    moveServos(50);
-  }else if (digitalRead(touchSw) == HIGH){
-    unsigned int position = qtrrc.readLine(sensorValues);
-    for(unsigned char i = 0; i < NUM_SENSORS; i++) {
-//      Serial.print(sensorValues[i]);
-//      Serial.print('\t');
-    }
-//    Serial.println(position);
-//    Serial.println("Auto");
-    static int lastError = 0;
-    int error = position - 1000;
-    float KP = .5;
-    int KD = 15;
-    int x = KP * error + KD * (error - lastError);
-    lastError = error;
-
-//    Serial.print("x: ");
-//    Serial.println(x);
-    x = constrain(x, -1000, 1000);
-    x = map(x, -1000, 1000, -128, 128);
-//    Serial.print("x: ");
-//    Serial.println(x);
-    ltAnalogX = x;
-    ltAnalogY = -55;
-  }else{
-    gripperAngle = 4500;
-    moveServos(4500);
-    autoMode = false;
-    ltAnalogY = 128;
-  }
+  
 }
 
   
@@ -473,7 +306,7 @@ void getCtlInputs () {
  * be faster to only request each input as it is needed, but this is clean and simple.
  * In the meantime, comment out any inputs that arent needed by the robot.
  */
-  if (PS3.PS3Connected) {
+/*  if (PS3.PS3Connected) {
       ltAnalogX = PS3.getAnalogHat(LeftHatX);  // get right stick X and Y positions and center on zero
       ltAnalogY = PS3.getAnalogHat(LeftHatY);
   //    rtAnalogX = PS3.getAnalogHat(RightHatX);
@@ -495,7 +328,7 @@ void getCtlInputs () {
       start = PS3.getButtonClick(START);
       select = PS3.getButtonClick(SELECT);
       psBtn = PS3.getButtonClick(PS);
-    digitalWrite(connectLED, HIGH);
+    digitalWrite(BTconnectLED, HIGH);
   }else{
     ltAnalogX = 127;  //reset buttons and axes if the controller drops out
     ltAnalogY = 127;
@@ -521,25 +354,30 @@ void getCtlInputs () {
     Serial.println("Waiting for PS3 controller...");
     unsigned int connectPrevMillis = 0;
     currentMillis = millis();
-    boolean connectLEDon = true;
-    digitalWrite(connectLED, HIGH);
+    boolean BTconnectLEDon = true;
+    digitalWrite(BTconnectLED, HIGH);
     while (!PS3.PS3Connected){
       battCheck();
       Usb.Task();
       if(currentMillis - connectPrevMillis > 250) {
-        connectLEDon = !connectLEDon;
-        if(connectLEDon){
-          digitalWrite(connectLED, HIGH);
+        BTconnectLEDon = !BTconnectLEDon;
+        if(BTconnectLEDon){
+          digitalWrite(BTconnectLED, HIGH);
         }else{
-          digitalWrite(connectLED, LOW);
+          digitalWrite(BTconnectLED, LOW);
         }
         connectPrevMillis = currentMillis;
       }
       //wait for controller to connect
     }
     Serial.println("Controller connected");
-    digitalWrite(connectLED, HIGH);
-  }
+    digitalWrite(BTconnectLED, HIGH);
+  }*/
+  ltAnalogX = constrain(analogRead(A1), 55, 975);
+  ltAnalogY = constrain(analogRead(A2), 55, 975);
+  
+  ltAnalogX = map(ltAnalogX, 55, 975, 0, 255);
+  ltAnalogY = map(ltAnalogY, 55, 975, 0, 255);
 }
 
 void inputCtlMod () {
@@ -576,10 +414,6 @@ void inputCtlMod () {
     rtAnalogY = constrain(rtAnalogY,-128,-rtAnalogYDeadZone);
     rtAnalogY = map(rtAnalogY,-128,-rtAnalogYDeadZone,-128 * ltAnalogYScaler,0);
   }
-  if (ctlRev == true) {
-    //ltAnalogX = -ltAnalogX;
-    ltAnalogY = -ltAnalogY;
-  }
 //  Serial.println("Axis values after deadzone: X: ");
 //  Serial.print(ltAnalogX);
 //  Serial.print("\tY: ");
@@ -595,7 +429,7 @@ void moveServos(int inc) {
  * resolution, angles are represented in multiples of 100, so 10 degrees is input as 1000, 
  * and 270 degrees is input as 27000.
  */
-  static int armBasePos = 0;
+/*  static int armBasePos = 0;
   static int armBase0Pos = 0;
   static int armBase1Pos = 0;
   static int armMidPos = 0;
@@ -680,14 +514,14 @@ void moveServos(int inc) {
     if(!armToHome && armBasePos == armBaseAngle && armMidPos == armMidAngle){
       armReady = true;
     }
-  }
+  }*/
 }
 
 void deactivateArm() {
 /*This function sends the arm to the home (collapsed) position, turns off servo
  * position input, and kills power to the servos.
  */
-  if(select){  //arm was just deactivated
+/*  if(select){  //arm was just deactivated
     armReady = false;
     armHome = false;    
   }
@@ -709,12 +543,12 @@ void deactivateArm() {
   }
 //  Serial.print(digitalRead(limSwA));
 //  Serial.println(digitalRead(limSwB));
-//  Serial.println();
+//  Serial.println();*/
 }
 
 void activateArm() {
 /*This function turns on power to the servos, and moves the arm to a ready position*/
-  if (armHome && select) {  //Was the arm fully home when it was activated?
+/*  if (armHome && select) {  //Was the arm fully home when it was activated?
     armHome = false;
     armReady = false;
     digitalWrite(armBase0Enable, HIGH);  //connect power and attach servo
@@ -732,7 +566,7 @@ void activateArm() {
     if (armMidPos < 3000) {
       armMidAngle = 3000;
     }
-  moveServos(50);
+  moveServos(50);*/
 }
 
 void battCheck(){
@@ -740,7 +574,7 @@ void battCheck(){
  * An LED flashes at a frequency dependent on the level of battery depletion.
  * Below a critical voltage, the mechanics of the robot are shut down and the program is halted.
  */
-  static unsigned long sensePrevMillis = 0;
+/*  static unsigned long sensePrevMillis = 0;
   static unsigned long battPrevMillis = 0;
   static int battLEDState = LOW;
   static int battLevel = analogRead(battSense);
@@ -806,36 +640,19 @@ void battCheck(){
 //    Serial.println();
     }
   if (battLevel < battCritical){
-    analogWrite(enA,0);  //shutdown pwm inputs to motors
-    analogWrite(enB,0);
-    armBase0.detach();  //shutdown servos
-    armBase1.detach();
-    armMid.detach();
-    gripper.detach();
-    digitalWrite(armBase0Enable, LOW);  //disconnect power from servos
-    digitalWrite(armBase1Enable, LOW);
-    digitalWrite(armMidEnable, LOW);
-    digitalWrite(armMidEnable, LOW);
-    digitalWrite(battLED0, HIGH);
-    digitalWrite(battLED1, HIGH);
-    Serial.println("Dead Battery");
+    digitalWrite(shutdownPin, HIGH);
     while(1){ //halt
     }
   }else if((battLevel < battWarn2) && (currentMillis - battPrevMillis >= 250)){  //flash fast
     battLEDState = !battLEDState;
-    digitalWrite(battLED0, battLEDState);
-    digitalWrite(battLED1, battLEDState);
+    digitalWrite(battLED, battLEDState);
     battPrevMillis = currentMillis;
   }else if((battLevel < battWarn1) && (currentMillis - battPrevMillis >= 1500)){  //flash slow
     battLEDState = !battLEDState;
-    digitalWrite(battLED0, battLEDState);
-    digitalWrite(battLED1, battLEDState);
+    digitalWrite(battLED, battLEDState);
     battPrevMillis = currentMillis;
   }else if ((battLevel > battWarn1) && (battLEDState == HIGH)){  //if the battery is good, turn the LED off.
     battLEDState = LOW;
-    digitalWrite(battLED0, battLEDState);
-    digitalWrite(battLED1, battLEDState);
-  }
+    digitalWrite(battLED, battLEDState);
+  }*/
 }
-
-
