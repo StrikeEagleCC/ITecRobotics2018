@@ -4,6 +4,17 @@
 #include <usbhub.h> //in case the bluetooth dongle has a hub
 #include <math.h>  //for trig functions
 
+/* These two lines make it simpler to concatenante serial prints. For example, istead of:
+ *  Serial.print("Voltage: ");
+ *  Serial.print(vbus_voltage);
+ *  Serial.println("V");
+ *  
+ *  you can instead use:
+ *  Serial << "Voltage: " << vbus_voltage << "V\n";
+ */
+template<class T> inline Print& operator <<(Print &obj,     T arg) { obj.print(arg);    return obj; }
+template<>        inline Print& operator <<(Print &obj, float arg) { obj.print(arg, 4); return obj; }
+
 
 /*~~~~~~~~~~~~~~~~~~ USB SHIELD AND DONGLE SETUP ~~~~~~~~~~~~~~~~~~~~*/
 // Satisfy the IDE, which needs to see the include statment in the ino too.
@@ -21,8 +32,6 @@ PS3BT PS3(&Btd, 0x00, 0x19, 0x0E, 0x18, 0xBC, 0xC3); // This is the dongles adre
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~ ODRIVE SETUP ~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 // Printing with stream operator
-template<class T> inline Print& operator <<(Print &obj,     T arg) { obj.print(arg);    return obj; }
-template<>        inline Print& operator <<(Print &obj, float arg) { obj.print(arg, 4); return obj; }
 
 #define odrive_serial Serial3
 
@@ -40,8 +49,10 @@ XYZrobotServo wrist(servo_serial, 3);
 XYZrobotServo gripper(servo_serial, 4);
 
 
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~ ROS SETUP ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+#define ROS_serial Serial1
+
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ PINOUT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
-int const battSense = A0;
 int const ODriveReset = 52;
 int const battLED = 6;
 int const BTconnectLED = 7;
@@ -64,10 +75,8 @@ float analogR2Scaler = 1;
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~ DRIVING SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~*/
 int steeringTrim = 0.0; // In radians, negative for left bias, positive for right bias
-float throttleScale = 1.4142; //scales velocity vector. Range: 0-1.4142 (sqrt(2)). Values greater than 1.4142 will have no effect other than reducing control resolution.
 float steerAdapt = .1; //sets the  adaptive steering. Range: 0-1. Higher values will reduce turning response at higher speeds.
-
-//need to add acceleration values, not sure how to implment them yet
+int accelerationLimit = 2000; //milliseconds to transition from full reverse to full forward. Higher value means slower acceleration (and deceleration)
 
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~~ SERVO SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~~*/
@@ -78,9 +87,9 @@ boolean gripperInvert = false;
 
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~ BATTERY SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~*/
-int battWarn1 = 661;  //level for first warning, sized for a 15K/6.8K divider. Specific values should be measured and tested with final setup
-int battWarn2 = 623;  //level for second warning
-int battCritical = 572; 
+int battWarn1 = 853;  //level for first warning, based on a mapping of float value from ODrive mapped 0,25.2,0,1023
+int battWarn2 = 804;  //level for second warning
+int battCritical = 731; 
 
 
 /*~~~~~~~~~~~~ VARIABLE DECLARATIONS AND INITIALIZATIONS ~~~~~~~~~~~~*/
@@ -127,14 +136,15 @@ void setup() {
     while(!Serial); //Wait for serial port to connect - used on Leonardo, Teensy, and otehr boards with built in USB CDC serial connection
     //^^^is this necessary for arduino then?
   #endif
-//  if (Usb.Init() == -1) {  //presumably, this if statement stops the boot if something doesnt start.
-//    Serial.print(F("\r\nOSC did not start"));  //what is the "F" in the argument here? and what is \nOSC?
-//    while (1); //halt  //is the purpose of this just to hang the board if the usb device isn't initialized?
-//  }
+  if (Usb.Init() == -1) {  //presumably, this if statement stops the boot if something doesnt start.
+    Serial.print(F("\r\nOSC did not start"));  //what is the "F" in the argument here? and what is \nOSC?
+    while (1); //halt  //is the purpose of this just to hang the board if the usb device isn't initialized?
+  }
   Serial.println(F("\r\nPS3 Bluetooth Library Started"));
 
   odrive_serial.begin(115200);
   servo_serial.begin(115200);
+  ROS_serial.begin(115200);
 
   pinMode(ODriveReset, OUTPUT);
   pinMode(battLED, OUTPUT);
@@ -142,8 +152,7 @@ void setup() {
   pinMode(shutdownPin, OUTPUT);
   digitalWrite(shutdownPin, LOW);
 
-  // Calibrate odrive motors
-
+  // Reset the ODrive
   Serial.println("Resetting ODrive . . .");
   digitalWrite(ODriveReset, LOW);
   delay(100);
@@ -152,11 +161,12 @@ void setup() {
 
   odrive_serial << "r vbus_voltage\n";
   while(odrive.readFloat() == 0.00) {
-    odrive_serial << "r vbus_voltage\n";
     delay(100);
+    odrive_serial << "r vbus_voltage\n";
   }
-  odrive_serial << "r vbus_voltage\n";
-  Serial << "VBus Voltage: " << odrive.readFloat() << "\n";
+
+  // Once the ODrive is online, battCheck will work
+  battCheck();
 
   Serial.println("Calibrating motors . . .");
   int requested_state = ODriveArduino::AXIS_STATE_MOTOR_CALIBRATION;
@@ -244,37 +254,80 @@ void driveCtl() {
   steeringTheta = steeringTheta + steeringTrim; //apply steering trim
   float driveR = sqrt(square(ltAnalogX)+square(ltAnalogY)); //determine the magnitude of the velocity vector
   driveR = constrain(driveR, 0, 128);
-  driveR = driveR * throttleScale; //apply throttle scale
   
-//  Serial.print("Steering Angle: \t");
-//  Serial.print(steeringTheta * 57.2957);
-//  Serial.print("\t Velocity Magnitude: \t");
-//  Serial.println(driveR);
+  Serial << "Steering Angle: \t" << (steeringTheta * 57.2957) << "\tVelocity Magnituded: \t" << driveR;
   
   steeringTheta = steeringTheta - .7854;  // rotate 45 degrees (pi/4)
-  static float LWS = 0;
-  static float RWS = 0;
+  static int LWSold = 0;
+  static int RWSold = 0;
+  static int LWS = 0;
+  static int RWS = 0;
+  
 //convert to cartesian and store as wheel speed
   LWS = driveR * sin(steeringTheta);
   RWS = driveR * cos(steeringTheta);
 
-  LWS = constrain(LWS, -128, 128);
-  RWS = constrain(RWS, -128, 128);
+  static boolean speedMode = false;
+  if(tri == true) speedMode = !speedMode;
 
+  static int accelerationMillis = millis();
+  float accelerationInc; 
+  accelerationInc = ((float) (millis() - accelerationMillis))/((float) accelerationLimit);
+  accelerationInc = constrain(accelerationInc, 0.0, 1.0);
+
+  if(speedMode) {
+    LWS = constrain(LWS, -90, 90);
+    RWS = constrain(RWS, -90, 90);
+
+    // Apply acceleration limits
+    accelerationInc = accelerationInc * 181;
+    if(LWS - LWSold > 0 && LWS - LWSold > accelerationInc) {
+      LWS = LWS + accelerationInc;
+    }else if (LWS - LWSold < 0 && LWS - LWSold < accelerationInc) {
+      LWS = LWS - accelerationInc;
+    }
+    if(RWS - RWSold > 0 && RWS - RWSold > accelerationInc) {
+      RWS = RWS + accelerationInc;
+    }else if (RWS - RWSold < 0 && RWS - RWSold < accelerationInc) {
+      RWS = RWS - accelerationInc;
+    }
   
-//  Serial.print("Wheel Speeds prior to mapping: LT: ");
-//  Serial.print(LWS);
-//  Serial.print("\tRT: ");
-//  Serial.println(RWS);
+    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << "RWS\n";
+    
+    LWSold = LWS;
+    RWSold = RWS;  
+    LWS = map(LWS, -90, 90, -117000, 117000);
+    RWS = map(RWS, -90, 90, -117000, 117000);
+  }else {
+    LWS = constrain(LWS, -127, 128);
+    RWS = constrain(RWS, -127, 128);
 
-
-  LWS = map(LWS, -128, 128, -117000, 117000);
-  RWS = map(RWS, -128, 128, -117000, 117000);
-
-  LWS = LWS * .5;
-  RWS = RWS * .5;
+    // Apply acceleration limits
+    accelerationInc = accelerationInc * 255;
+    if(LWS - LWSold > 0 && LWS - LWSold > accelerationInc) {
+      LWS = LWS + accelerationInc;
+    }else if (LWS - LWSold < 0 && LWS - LWSold < accelerationInc) {
+      LWS = LWS - accelerationInc;
+    }
+    if(RWS - RWSold > 0 && RWS - RWSold > accelerationInc) {
+      RWS = RWS + accelerationInc;
+    }else if (RWS - RWSold < 0 && RWS - RWSold < accelerationInc) {
+      RWS = RWS - accelerationInc;
+    }
+  
+    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << "RWS\n";
+    
+    LWSold = LWS;
+    RWSold = RWS;
+    LWS = map(LWS, -127, 128, -60000, 60000);
+    RWS = map(RWS, -127, 128, -60000, 60000);
+  }
+  
+  //apply acceleration limits here
   odrive.SetVelocity(0, LWS);
   odrive.SetVelocity(1, RWS);
+
+  accelerationMillis = millis();
 }
 
 //void armCtl() {
@@ -333,7 +386,7 @@ void getCtlInputs () {
  * be faster to only request each input as it is needed, but this is clean and simple.
  * In the meantime, comment out any inputs that arent needed by the robot.
  */
-/*  if (PS3.PS3Connected) {
+  if (PS3.PS3Connected) {
       ltAnalogX = PS3.getAnalogHat(LeftHatX);  // get right stick X and Y positions and center on zero
       ltAnalogY = PS3.getAnalogHat(LeftHatY);
   //    rtAnalogX = PS3.getAnalogHat(RightHatX);
@@ -399,31 +452,18 @@ void getCtlInputs () {
     }
     Serial.println("Controller connected");
     digitalWrite(BTconnectLED, HIGH);
-  }*/
-  ltAnalogX = constrain(analogRead(A1), 62, 963);
-  ltAnalogY = constrain(analogRead(A2), 56, 912);
-
-  if (ltAnalogX <  503) ltAnalogX = map(ltAnalogX,  62, 502,   0, 127);
-  if (ltAnalogX >= 503) ltAnalogX = map(ltAnalogX, 503, 963, 128, 255);
-  if (ltAnalogY <  485) ltAnalogY = map(ltAnalogY,  56, 484,   0, 127);
-  if (ltAnalogY >= 485) ltAnalogY = map(ltAnalogY, 485, 912, 128, 255);
-//  Serial.print(ltAnalogX);
-//  Serial.print("\t");
-//  Serial.println(ltAnalogY);
+  }
 }
 
 void inputCtlMod () {
-/*This function centers analog stick inputs on zero, flips the necessary axes,
- * applies deadzones, and scales inputs.
- */
+  /*This function centers analog stick inputs on zero, flips the necessary axes,
+   * applies deadzones, and scales inputs.
+   */
   ltAnalogX = ltAnalogX - 127; //center on zero
   ltAnalogY = ltAnalogY - 127; //flip input direction and center on zero
   rtAnalogY = map(rtAnalogY, 0, 255, 255, 0) - 127;
 
-//  Serial.println("Axis values before deadzone: X: ");
-//  Serial.print(ltAnalogX);
-//  Serial.print("\tY: ");
-//  Serial.print(ltAnalogY);
+//  Serial << "Axis values before deadzone: X: " << ltAnalogX << "\tY: " << ltAnalogY << '\n';
   
   if(ltAnalogX >=0){
     ltAnalogX = constrain(ltAnalogX,ltAnalogXDeadZone,128);  //apply deadzones
@@ -446,10 +486,8 @@ void inputCtlMod () {
     rtAnalogY = constrain(rtAnalogY,-128,-rtAnalogYDeadZone);
     rtAnalogY = map(rtAnalogY,-128,-rtAnalogYDeadZone,-128 * ltAnalogYScaler,0);
   }
-//  Serial.println("Axis values after deadzone: X: ");
-//  Serial.print(ltAnalogX);
-//  Serial.print("\tY: ");
-//  Serial.print(ltAnalogY);
+
+//  Serial << "Axis values after deadzone: X: " << ltAnalogX << "\tY: " << ltAnalogY << '\n';
 }
 
 ////void moveServos(int inc) {
@@ -601,94 +639,98 @@ void inputCtlMod () {
 //  moveServos(50);
 //}
 
-//void battCheck(){
-///* This function averages the battery voltage with 10 samples over a 2.5 second period.
-// * An LED flashes at a frequency dependent on the level of battery depletion.
-// * Below a critical voltage, the mechanics of the robot are shut down and the program is halted.
-// */
-//  static unsigned long sensePrevMillis = 0;
-//  static unsigned long battPrevMillis = 0;
-//  static int battLEDState = LOW;
-//  static int battLevel = analogRead(battSense);
-//  static int battLevel0 = battLevel;
-//  static int battLevel1 = battLevel;
-//  static int battLevel2 = battLevel;
-//  static int battLevel3 = battLevel;
-//  static int battLevel4 = battLevel;
-//  static int battLevel5 = battLevel;
-//  static int battLevel6 = battLevel;
-//  static int battLevel7 = battLevel;
-//  static int battLevel8 = battLevel;
-//  static int battLevel9 = battLevel;
-//  static int i = 0;
-//    currentMillis = millis();  
-//  if (currentMillis - sensePrevMillis >= 250){  //Check battery voltage 4 times per second
-//    switch (i){  //store one reading per iteration, and average. there's probably a better way to do this with a for loop or something, but this works.
-//      case 0:
-//        battLevel0 = analogRead(battSense);
-//        break;
-//      case 1:
-//        battLevel1 = analogRead(battSense);
-//        break;
-//      case 2:
-//        battLevel2 = analogRead(battSense);
-//        break;
-//      case 3:
-//        battLevel3 = analogRead(battSense);
-//        break;
-//      case 4:
-//        battLevel4 = analogRead(battSense);
-//        break;
-//      case 5:
-//        battLevel5 = analogRead(battSense);
-//        break;
-//      case 6:
-//        battLevel6 = analogRead(battSense);
-//        break;
-//      case 7:
-//        battLevel7 = analogRead(battSense);
-//        break;
-//      case 8:
-//        battLevel8 = analogRead(battSense);
-//        break;
-//      case 9:
-//        battLevel9 = analogRead(battSense);
-//        break;
-//    }
-//    battLevel = (battLevel0 + battLevel1 + battLevel2 + battLevel3 + battLevel4 + battLevel5 + battLevel6 + battLevel7 + battLevel8 + battLevel9) / 10;
-//    if (i <= 9){
-//      i = ++i;
-//    }else{
-//      i=0;
-//    }
-//    sensePrevMillis = currentMillis;  
-//
-////    Serial.print(analogRead(battSense));
-////    Serial.print("\t\t");
-////    Serial.print(battLevel);
-////    Serial.print("\t\t");
-////    Serial.println(battLevel * .015673);
-////    Serial.println();
-////    Serial.println();
-//    }
-//  if (battLevel < battCritical){
-//    digitalWrite(shutdownPin, HIGH);
-//    while(1){ //halt
-//    }
-//  }else if((battLevel < battWarn2) && (currentMillis - battPrevMillis >= 250)){  //flash fast
-//    battLEDState = !battLEDState;
-//    digitalWrite(battLED, battLEDState);
-//    battPrevMillis = currentMillis;
-//  }else if((battLevel < battWarn1) && (currentMillis - battPrevMillis >= 1500)){  //flash slow
-//    battLEDState = !battLEDState;
-//    digitalWrite(battLED, battLEDState);
-//    battPrevMillis = currentMillis;
-//  }else if ((battLevel > battWarn1) && (battLEDState == HIGH)){  //if the battery is good, turn the LED off.
-//    battLEDState = LOW;
-//    digitalWrite(battLED, battLEDState);
-//  }
-//}
+void battCheck(){
+/* This function averages the battery voltage with 10 samples over a 2.5 second period.
+ * An LED flashes at a frequency dependent on the level of battery depletion.
+ * Below a critical voltage, the mechanics of the robot are shut down and the program is halted.
+ */
+  static unsigned long sensePrevMillis = 0;
+  static unsigned long battPrevMillis = 0;
+  static int battLEDState = LOW;
+  static int battLevel = 0;
+  static int battLevel0 = battWarn1;
+  static int battLevel1 = battWarn1;
+  static int battLevel2 = battWarn1;
+  static int battLevel3 = battWarn1;
+  static int battLevel4 = battWarn1;
+  static int battLevel5 = battWarn1;
+  static int battLevel6 = battWarn1;
+  static int battLevel7 = battWarn1;
+  static int battLevel8 = battWarn1;
+  static int battLevel9 = battWarn1;
+  static int i = 0;
+
+  odrive_serial << "r vbus_voltage\n";
+  battLevel = map(odrive.readFloat(),0,26,0,1023);
+  
+  currentMillis = millis();  
+  if (currentMillis - sensePrevMillis >= 250){  //Check battery voltage 4 times per second
+    switch (i){  //store one reading per iteration, and average. there's probably a better way to do this with a for loop and an array or something, but this works.
+      case 0:
+        battLevel0 = battLevel;
+        break;
+      case 1:
+        battLevel1 = battLevel;
+        break;
+      case 2:
+        battLevel2 = battLevel;
+        break;
+      case 3:
+        battLevel3 = battLevel;
+        break;
+      case 4:
+        battLevel4 = battLevel;
+        break;
+      case 5:
+        battLevel5 = battLevel;
+        break;
+      case 6:
+        battLevel6 = battLevel;
+        break;
+      case 7:
+        battLevel7 = battLevel;
+        break;
+      case 8:
+        battLevel8 = battLevel;
+        break;
+      case 9:
+        battLevel9 = battLevel;
+        break;
+    }
+
+    //average all the values over the last 2.5 seconds
+    battLevel = (battLevel0 + battLevel1 + battLevel2 + battLevel3 + battLevel4 + battLevel5 + battLevel6 + battLevel7 + battLevel8 + battLevel9) / 10;
+    Serial << "Battery Voltage: " << battLevel << '\n';
+    
+    if (i <= 9){
+      i = ++i;
+    }else{
+      i=0;
+    }
+    sensePrevMillis = currentMillis;  
+  }
+
+  //take actions based on battery level
+  if (battLevel < battCritical){
+    Serial << "Battery critically low. Shutting down . . . \n";
+    digitalWrite(shutdownPin, HIGH);
+    while(1); //halt
+  }else if((battLevel < battWarn2) && (currentMillis - battPrevMillis >= 250)){  //flash fast
+    Serial << "Battery very low.\n";
+    battLEDState = !battLEDState;
+    digitalWrite(battLED, battLEDState);
+    battPrevMillis = currentMillis;
+  }else if((battLevel < battWarn1) && (currentMillis - battPrevMillis >= 1500)){  //flash slow
+    Serial << "Battery low.\n";
+    battLEDState = !battLEDState;
+    digitalWrite(battLED, battLEDState);
+    battPrevMillis = currentMillis;
+  }else if ((battLevel > battWarn1) && (battLEDState == HIGH)){  //if the battery is good, turn the LED off.
+    battLEDState = LOW;
+    digitalWrite(battLED, battLEDState);
+  }
+}
 
 boolean odriveCheck (){
-  
+  //use this function to check the axis, motors, and encoders for errors, as well as for the correct control modes
 }
