@@ -20,8 +20,8 @@ template<>        inline Print& operator <<(Print &obj, float arg) { obj.print(a
 // Satisfy the IDE, which needs to see the include statment in the ino too.
 #ifdef dobogusinclude
 #include <spi4teensy3.h>
-#include <SPI.h>
 #endif
+#include <SPI.h>
 
 USB Usb;
 //USBHub Hub1(&Usb); // Some dongles have a hub inside
@@ -55,7 +55,7 @@ XYZrobotServo gripper(servo_serial, 4);
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ PINOUT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 int const ODriveReset = 52;
 int const battLED = 6;
-int const BTconnectLED = 7;
+int const BTconnectLED = 13;
 int const shutdownPin = 8;
 
 /*~~~~~~~~~~~~~~~~~~~~~~ CONTROLLER SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~*/
@@ -192,31 +192,31 @@ void setup() {
 
   
   // Wait for PS3 controller to connect
-//  if (!PS3.PS3Connected){
-//    Serial.println("Waiting for PS3 controller...");
-//    unsigned int connectPrevMillis = 0;
-//    currentMillis = millis();
-//    static boolean BTconnectLEDState = true;
-//    digitalWrite(BTconnectLED, HIGH);
-//    while (!PS3.PS3Connected){
-//      battCheck();
-//      Usb.Task();
-//      if(currentMillis - connectPrevMillis > 250) {
-//        BTconnectLEDState = !BTconnectLEDState;
-//      if(BTconnectLEDState){
-//      }
-//        if(BTconnectLEDState == true){
-//          digitalWrite(BTconnectLED, HIGH);
-//        }else{
-//          digitalWrite(BTconnectLED, LOW);
-//        }
-//        connectPrevMillis = currentMillis;
-//      }
-//      //wait for controller to connect
-//    }
-//    Serial.println("Controller connected");
-//    digitalWrite(BTconnectLED, HIGH); 
-//  }  
+  if (!PS3.PS3Connected){
+    Serial.println("Waiting for PS3 controller...");
+    unsigned int connectPrevMillis = 0;
+    currentMillis = millis();
+    static boolean BTconnectLEDState = true;
+    digitalWrite(BTconnectLED, HIGH);
+    while (!PS3.PS3Connected){
+      battCheck();
+      Usb.Task();
+      if(currentMillis - connectPrevMillis > 250) {
+        BTconnectLEDState = !BTconnectLEDState;
+      if(BTconnectLEDState){
+      }
+        if(BTconnectLEDState == true){
+          digitalWrite(BTconnectLED, HIGH);
+        }else{
+          digitalWrite(BTconnectLED, LOW);
+        }
+        connectPrevMillis = currentMillis;
+      }
+      //wait for controller to connect
+    }
+    Serial.println("Controller connected");
+    digitalWrite(BTconnectLED, HIGH); 
+  }  
 }
 
   
@@ -700,7 +700,7 @@ void battCheck(){
 
     //average all the values over the last 2.5 seconds
     battLevel = (battLevel0 + battLevel1 + battLevel2 + battLevel3 + battLevel4 + battLevel5 + battLevel6 + battLevel7 + battLevel8 + battLevel9) / 10;
-    Serial << "Battery Voltage: " << battLevel << '\n';
+//    Serial << "Battery Voltage: " << battLevel << '\n';
     
     if (i <= 9){
       i = ++i;
