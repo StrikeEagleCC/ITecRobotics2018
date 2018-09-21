@@ -27,7 +27,7 @@ USB Usb;
 //USBHub Hub1(&Usb); // Some dongles have a hub inside
 
 BTD Btd(&Usb); // create the Bluetooth Dongle instance
-PS3BT PS3(&Btd, 0x00, 0x19, 0x0E, 0x18, 0xBC, 0xC3); // This is the dongles adress. It will change with different dongles.
+PS3BT PS3(&Btd, 0x00, 0x1A, 0x7D, 0xDA, 0x71, 0x13); // This is the dongles adress. It will change with different dongles.
 
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~ ODRIVE SETUP ~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
@@ -185,8 +185,9 @@ void setup() {
 
   Serial.println("Setting closed loop control . . .");
   requested_state = ODriveArduino::AXIS_STATE_CLOSED_LOOP_CONTROL;
-  odrive.run_state(0, requested_state, true);
+  odrive.run_state(0, requested_state, false);
   odrive.run_state(1, requested_state, true);
+  
   Serial.println("Motors are good to go!");
 
 
@@ -221,8 +222,8 @@ void setup() {
 
   
 void loop() {
-//  Usb.Task();
-//  battCheck();
+  Usb.Task();
+  battCheck();
   getCtlInputs();
   inputCtlMod();
 
@@ -255,13 +256,11 @@ void driveCtl() {
   float driveR = sqrt(square(ltAnalogX)+square(ltAnalogY)); //determine the magnitude of the velocity vector
   driveR = constrain(driveR, 0, 128);
   
-  Serial << "Steering Angle: \t" << (steeringTheta * 57.2957) << "\tVelocity Magnituded: \t" << driveR;
+  //Serial << "Steering Angle: \t" << (steeringTheta * 57.2957) << "\tVelocity Magnituded: \t" << driveR << "\n\n";
   
   steeringTheta = steeringTheta - .7854;  // rotate 45 degrees (pi/4)
-  static int LWSold = 0;
-  static int RWSold = 0;
-  static int LWS = 0;
-  static int RWS = 0;
+  static long LWS = 0;
+  static long RWS = 0;
   
 //convert to cartesian and store as wheel speed
   LWS = driveR * sin(steeringTheta);
@@ -270,64 +269,32 @@ void driveCtl() {
   static boolean speedMode = false;
   if(tri == true) speedMode = !speedMode;
 
-  static int accelerationMillis = millis();
-  float accelerationInc; 
-  accelerationInc = ((float) (millis() - accelerationMillis))/((float) accelerationLimit);
-  accelerationInc = constrain(accelerationInc, 0.0, 1.0);
-
   if(speedMode) {
     LWS = constrain(LWS, -90, 90);
     RWS = constrain(RWS, -90, 90);
 
-    // Apply acceleration limits
-    accelerationInc = accelerationInc * 181;
-    if(LWS - LWSold > 0 && LWS - LWSold > accelerationInc) {
-      LWS = LWS + accelerationInc;
-    }else if (LWS - LWSold < 0 && LWS - LWSold < accelerationInc) {
-      LWS = LWS - accelerationInc;
-    }
-    if(RWS - RWSold > 0 && RWS - RWSold > accelerationInc) {
-      RWS = RWS + accelerationInc;
-    }else if (RWS - RWSold < 0 && RWS - RWSold < accelerationInc) {
-      RWS = RWS - accelerationInc;
-    }
-  
-    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << "RWS\n";
-    
-    LWSold = LWS;
-    RWSold = RWS;  
+    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
+
     LWS = map(LWS, -90, 90, -117000, 117000);
     RWS = map(RWS, -90, 90, -117000, 117000);
+    
+    Serial << "Wheel after mapping: \tLT: " << LWS << "\tRT: " << RWS << '\n';
+    
   }else {
     LWS = constrain(LWS, -127, 128);
     RWS = constrain(RWS, -127, 128);
 
-    // Apply acceleration limits
-    accelerationInc = accelerationInc * 255;
-    if(LWS - LWSold > 0 && LWS - LWSold > accelerationInc) {
-      LWS = LWS + accelerationInc;
-    }else if (LWS - LWSold < 0 && LWS - LWSold < accelerationInc) {
-      LWS = LWS - accelerationInc;
-    }
-    if(RWS - RWSold > 0 && RWS - RWSold > accelerationInc) {
-      RWS = RWS + accelerationInc;
-    }else if (RWS - RWSold < 0 && RWS - RWSold < accelerationInc) {
-      RWS = RWS - accelerationInc;
-    }
-  
-    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << "RWS\n";
-    
-    LWSold = LWS;
-    RWSold = RWS;
+    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
+
     LWS = map(LWS, -127, 128, -60000, 60000);
     RWS = map(RWS, -127, 128, -60000, 60000);
+
+    Serial << "Wheel after mapping:\t LT: " << LWS << "\tRT: " << RWS << '\n';
   }
   
-  //apply acceleration limits here
   odrive.SetVelocity(0, LWS);
   odrive.SetVelocity(1, RWS);
 
-  accelerationMillis = millis();
 }
 
 //void armCtl() {
