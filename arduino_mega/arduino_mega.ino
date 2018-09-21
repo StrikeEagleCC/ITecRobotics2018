@@ -190,15 +190,15 @@ void setup() {
   
   //check both motors are in closed loop control mode
   int timeout_ctr = 100;
+  int stateCheck = 0;
   do {
-    int state = 0;
     delay(100);
     odrive_serial << "r axis0.current_state\n";
-    if(odrive.readInt() != requested_state) state = ++state;
+    if(odrive.readInt() != requested_state) stateCheck = ++stateCheck;
     odrive_serial << "r axis1.current_state\n";
-    if(odrive.readInt() != requested_state) state = ++state;
-    if(timeout_ctr = 1) Serial.println "Could not set closed loop control";
-  } while (state != 0 || --timeout_ctr > 0);
+    if(odrive.readInt() != requested_state) stateCheck = ++stateCheck;
+    if(timeout_ctr = 1) Serial.println ("Could not set closed loop control");
+  } while (stateCheck != 0 || --timeout_ctr > 0);
   
   if(timeout_ctr > 0) Serial.println("Motors are good to go!");
   
@@ -264,7 +264,7 @@ void driveCtl() {
   float steeringTheta = atan2(ltAnalogX, ltAnalogY); //determine angle of velocity vector
   steeringTheta = steeringTheta + steeringTrim; //apply steering trim
   float driveR = sqrt(square(ltAnalogX)+square(ltAnalogY)); //determine the magnitude of the velocity vector
-  driveR = constrain(driveR, 0f, 128f);
+  driveR = constrain(driveR, 0.0, 128.0);
   unsigned int driveRscaled = driveR * 511; //scale up for application of acceleration limits. effectively constrained to 65,408
       
   //Serial << "Steering Angle: \t" << (steeringTheta * 57.2957) << "\tVelocity Magnituded: \t" << driveR << "\n\n";
