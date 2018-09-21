@@ -76,7 +76,7 @@ float analogR2Scaler = 1;
 /*~~~~~~~~~~~~~~~~~~~~~~~~ DRIVING SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~*/
 int steeringTrim = 0.0; // In radians, negative for left bias, positive for right bias
 float steerAdapt = .1; //sets the  adaptive steering. Range: 0-1. Higher values will reduce turning response at higher speeds.
-int accelerationLimit = 2000; //milliseconds to transition from full reverse to full forward. Higher value means slower acceleration (and deceleration)
+int accelerationTime = 2000; //milliseconds to transition from full reverse to full forward. Higher value means slower acceleration (and deceleration)
 
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~~ SERVO SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~~*/
@@ -186,11 +186,21 @@ void setup() {
   Serial.println("Setting closed loop control . . .");
   requested_state = ODriveArduino::AXIS_STATE_CLOSED_LOOP_CONTROL;
   odrive.run_state(0, requested_state, false);
-  odrive.run_state(1, requested_state, true);
+  odrive.run_state(1, requested_state, false);
   
-  Serial.println("Motors are good to go!");
-
-
+  //check both motors are in closed loop control mode
+  int timeout_ctr = 100;
+  do {
+    int state = 0;
+    delay(100);
+    odrive_serial << "r axis0.current_state\n";
+    if(odrive.readInt() != requested_state) state = ++state;
+    odrive_serial << "r axis1.current_state\n";
+    if(odrive.readInt() != requested_state) state = ++state;
+    if(timeout_ctr = 1) Serial.println "Could not set closed loop control";
+  } while (state != 0 || --timeout_ctr > 0);
+  
+  if(timeout_ctr > 0) Serial.println("Motors are good to go!");
   
   // Wait for PS3 controller to connect
   if (!PS3.PS3Connected){
@@ -254,22 +264,64 @@ void driveCtl() {
   float steeringTheta = atan2(ltAnalogX, ltAnalogY); //determine angle of velocity vector
   steeringTheta = steeringTheta + steeringTrim; //apply steering trim
   float driveR = sqrt(square(ltAnalogX)+square(ltAnalogY)); //determine the magnitude of the velocity vector
-  driveR = constrain(driveR, 0, 128);
-  
+  driveR = constrain(driveR, 0f, 128f);
+  unsigned int driveRscaled = driveR * 511; //scale up for application of acceleration limits. effectively constrained to 65,408
+      
   //Serial << "Steering Angle: \t" << (steeringTheta * 57.2957) << "\tVelocity Magnituded: \t" << driveR << "\n\n";
   
-  steeringTheta = steeringTheta - .7854;  // rotate 45 degrees (pi/4)
-  static long LWS = 0;
-  static long RWS = 0;
+  steeringTheta = steeringTheta - .7854;  // rotate vector 45 degrees (pi/4)
+  
+  long LWS = 0;
+  long RWS = 0;
+  static long lastLWS = 0;
+  static long lastRWS = 0;
   
 //convert to cartesian and store as wheel speed
-  LWS = driveR * sin(steeringTheta);
-  RWS = driveR * cos(steeringTheta);
+  LWS = driveRscaled * sin(steeringTheta);
+  RWS = driveRscaled * cos(steeringTheta);
+  
+  //apply acceleration limits
+  static unsigned long accMillis = millis();
+  currentMillis = millis();
+  unsigned long elapsed = currentMillis - accMillis;
+  accMillis = currentMillis;
+  
+  if (elapsed < accelerationTime) {  //only apply acceleration limits if code is running fast enough
+    // Determine acceleration increment
+    float accelerationInc;
+    accelerationInc = (elapsed)/ ((float) accelerationTime) * 65408; //65,408: the effective limit on wheel speed
+  
+    // Apply limits to left wheel wheel speed
+    long LWSdiff = LWS - lastLWS;
+    if (abs(LWSdiff) > accelerationInc) {
+      if (LWSdiff > 0) { //accelerating in forward or decelerating in reverse
+        LWS = lastLWS + accelerationInc;
+      }else if (LWSdiff < 0) { //accelerating in reverse or decelerating forward
+        LWS = lastLWS - accelerationInc;
+      }
+    }
+    // Apply limits to right wheel speed
+    long RWSdiff = RWS - lastRWS;
+    if (abs(RWSdiff) > accelerationInc) {
+      if (RWSdiff > 0) { //accelerating in forward or decelerating in reverse
+        RWS = lastRWS + accelerationInc;
+      }else if (RWSdiff < 0) { //accelerating in reverse or decelerating forward
+        RWS = lastRWS - accelerationInc;
+      }
+    }
+  }
+  lastLWS = LWS;
+  lastRWS = RWS;
+  
+  // Map speeds back to values easier to visualize
+  LWS = map(LWS, -65408, 65408, -128, 128);
+  RWS = map(RWS, -65408, 65408, -128, 128);
 
   static boolean speedMode = false;
   if(tri == true) speedMode = !speedMode;
 
   if(speedMode) {
+    // SpeedMode maximizes forward velocity at the expense of control resolution and turning radius at speed
     LWS = constrain(LWS, -90, 90);
     RWS = constrain(RWS, -90, 90);
 
@@ -281,13 +333,10 @@ void driveCtl() {
     Serial << "Wheel after mapping: \tLT: " << LWS << "\tRT: " << RWS << '\n';
     
   }else {
-    LWS = constrain(LWS, -127, 128);
-    RWS = constrain(RWS, -127, 128);
-
     Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
 
-    LWS = map(LWS, -127, 128, -60000, 60000);
-    RWS = map(RWS, -127, 128, -60000, 60000);
+    LWS = map(LWS, -128, 128, -60000, 60000);
+    RWS = map(RWS, -128, 128, -60000, 60000);
 
     Serial << "Wheel after mapping:\t LT: " << LWS << "\tRT: " << RWS << '\n';
   }
