@@ -12,27 +12,18 @@
  *  you can instead use:
  *  Serial << "Voltage: " << vbus_voltage << "V\n";
  */
+// Printing with stream operator
 template<class T> inline Print& operator <<(Print &obj,     T arg) { obj.print(arg);    return obj; }
 template<>        inline Print& operator <<(Print &obj, float arg) { obj.print(arg, 4); return obj; }
 
 
 /*~~~~~~~~~~~~~~~~~~ USB SHIELD AND DONGLE SETUP ~~~~~~~~~~~~~~~~~~~~*/
-// Satisfy the IDE, which needs to see the include statment in the ino too.
-#ifdef dobogusinclude
-#include <spi4teensy3.h>
-#endif
-#include <SPI.h>
-
 USB Usb;
-//USBHub Hub1(&Usb); // Some dongles have a hub inside
-
 BTD Btd(&Usb); // create the Bluetooth Dongle instance
 PS3BT PS3(&Btd, 0x00, 0x1A, 0x7D, 0xDA, 0x71, 0x13); // This is the dongles adress. It will change with different dongles.
 
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~ ODRIVE SETUP ~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
-// Printing with stream operator
-
 #define odrive_serial Serial3
 
 // ODrive object
@@ -57,6 +48,9 @@ int const ODriveReset = 52;
 int const battLED = 6;
 int const BTconnectLED = 13;
 int const shutdownPin = 8;
+int const detectorEnablePin = 999;
+int const DetectorTriggerPin = 999;
+int const detectorAlertPin = 999;
 
 /*~~~~~~~~~~~~~~~~~~~~~~ CONTROLLER SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~*/
 int ltAnalogXDeadZone = 10;  //set deazone ranges each axis on each stick. Values will probably be less than 10
@@ -75,7 +69,6 @@ float analogR2Scaler = 1;
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~ DRIVING SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~*/
 int steeringTrim = 0.0; // In radians, negative for left bias, positive for right bias
-float steerAdapt = .1; //sets the  adaptive steering. Range: 0-1. Higher values will reduce turning response at higher speeds.
 int accelerationTime = 2000; //milliseconds to transition from full reverse to full forward. Higher value means slower acceleration (and deceleration)
 
 
@@ -258,7 +251,6 @@ void driveCtl() {
  * is possible, as well as implementation of adaptive steering. Adaptive steering dampens turning input
  * as forward velocity increases.
  */
-//  ltAnalogX = ltAnalogX * (1 - ((abs(ltAnalogY) * steerAdapt) / 128));  //apply adaptive steering
  
 //Convert to polar coordinates  
   float steeringTheta = atan2(ltAnalogX, ltAnalogY); //determine angle of velocity vector
