@@ -338,47 +338,47 @@ void driveCtl() {
 
 }
 
-void armCtl() {
-/*Controls the arm. Angles are represented as multiples of 100, so 10 degrees = 1000.
- */
-  static unsigned long armPrevMillis = 0;
-  currentMillis = millis();
-  if(select){
-    armToHome = !armToHome; //toggle arm home state if button is pressed
-  }
-  if(armToHome){
-    deactivateArm();
-  }else if (!armToHome && !armReady){  //test to see if the arm was just activated
-    activateArm();
-  }else if (armReady && currentMillis - armPrevMillis > 20){  //If the arm is active, enable control. The timer is necessary to keep input speed constant regardless of loop speed
-    armPrevMillis = currentMillis;
-    if (rtAnalogY > 0){
-      armBaseAngle = armBaseAngle + rtAnalogY / 2;
-    }
-    if (rtAnalogY < 0) {
-      armBaseAngle = armBaseAngle + rtAnalogY /2;
-    }
-    armBaseAngle = constrain(armBaseAngle,2000,22088);  //constrain angle to valid number, and keep it from crashing into itself
-    
-    if (analogL2btn > 0){
-      armMidAngle = armMidAngle + (analogL2btn /  4);
-    }else if (analogR2btn > 0){
-      armMidAngle = armMidAngle - (analogR2btn / 4);
-    }
-    armMidAngle = constrain(armMidAngle,2000,27000);  //constrain angle to valid number, and keep it from crashing into itself
-    
-    if (l1 == true){
-      gripperAngle = gripperAngle + 100;
-    }
-    if (r1 == true){
-      gripperAngle = gripperAngle - 100;
-    }
-   gripperAngle = constrain(gripperAngle,700,10000);
-   
-   moveServos(5000);
-  }
-//  Serial.print(armBaseAngle);
-}
+//void armCtl() {
+///*Controls the arm. Angles are represented as multiples of 100, so 10 degrees = 1000.
+// */
+//  static unsigned long armPrevMillis = 0;
+//  currentMillis = millis();
+//  if(select){
+//    armToHome = !armToHome; //toggle arm home state if button is pressed
+//  }
+//  if(armToHome){
+//    deactivateArm();
+//  }else if (!armToHome && !armReady){  //test to see if the arm was just activated
+//    activateArm();
+//  }else if (armReady && currentMillis - armPrevMillis > 20){  //If the arm is active, enable control. The timer is necessary to keep input speed constant regardless of loop speed
+//    armPrevMillis = currentMillis;
+//    if (rtAnalogY > 0){
+//      armBaseAngle = armBaseAngle + rtAnalogY / 2;
+//    }
+//    if (rtAnalogY < 0) {
+//      armBaseAngle = armBaseAngle + rtAnalogY /2;
+//    }
+//    armBaseAngle = constrain(armBaseAngle,2000,22088);  //constrain angle to valid number, and keep it from crashing into itself
+//    
+//    if (analogL2btn > 0){
+//      armMidAngle = armMidAngle + (analogL2btn /  4);
+//    }else if (analogR2btn > 0){
+//      armMidAngle = armMidAngle - (analogR2btn / 4);
+//    }
+//    armMidAngle = constrain(armMidAngle,2000,27000);  //constrain angle to valid number, and keep it from crashing into itself
+//    
+//    if (l1 == true){
+//      gripperAngle = gripperAngle + 100;
+//    }
+//    if (r1 == true){
+//      gripperAngle = gripperAngle - 100;
+//    }
+//   gripperAngle = constrain(gripperAngle,700,10000);
+//   
+//   moveServos(5000);
+//  }
+////  Serial.print(armBaseAngle);
+//}
 
 
 void autoModeCtl() {
