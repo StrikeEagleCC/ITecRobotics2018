@@ -68,57 +68,83 @@ float analogR2Scaler = 1;
 
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~ DRIVING SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~*/
-int steeringTrim = 0.0; // In radians, negative for left bias, positive for right bias
-int accelerationTime = 1000; //milliseconds to transition from full reverse to full forward. Higher value means slower acceleration (and deceleration)
+int steeringTrim      = 0.0;   // In radians, negative for left bias, positive for right bias
+int accelerationTime  = 1000;  //milliseconds to transition from full reverse to full forward. Higher value means slower acceleration (and deceleration)
 
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~~ SERVO SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~~*/
-boolean armBaseInvert = true;
-boolean armMidInvert = false;
-boolean armWristInvert = false;
-boolean gripperInvert = false;
+boolean armBaseInvert  = true;
+boolean armMidInvert   = false;
+boolean wristInvert    = false;
+boolean gripperInvert  = false;
+
+// Servo preset angles. Angles range from -16500 to 16500. Units are 100th's of a degree, to avoid floating point math later.
+long armBaseHomeAngle  = 0;
+long armMidHomeAngle   = 0;
+long wristHomeAngle    = 0;
+long gripperHomeAngle  = 0;
+
+long armBaseReadyAngle  = 0;
+long armMidReadyAngle   = 0;
+long wristReadyAngle    = 0;
+long gripperReadyAngle  = 0;
+
+long armBaseAngleLimit[2]  = {-165000,165000};
+long armMidAngleLimit[2]   = {-165000, 165000};
+long wristAngleLimit[2]    = {-165000, 165000};
+long gripperAngleLimit[2]  = {-165000, 165000};
+
+int servoUpdateSpeed  = 2; //in 10's of milliseconds (2 = 20ms)
 
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~ BATTERY SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~*/
-int battWarn1 = 853;  //level for first warning, based on a mapping of float value from ODrive mapped 0,25.2,0,1023
-int battWarn2 = 804;  //level for second warning
-int battCritical = 731; 
+
+const int battWarn1          =  853;       //level for first warning, based on a mapping of float value from ODrive mapped 0,25.2,0,1023
+const int battWarn2          =  804;       //level for second warning
+const int battCritical       =  731;       //critical level
+const int battNumSamples     =  10;        //number of samples to average
+const int battSampleInterval =  1000;      //how often to take samples (in milliseconds)
+const int battFlashInterval1 =  1500;      //how often to flash indicator at first warning (milliseconds)
+const int battFlashInterval2 =  250;       //how often to flash indicator at second warning (milliseconds)
 
 
 /*~~~~~~~~~~~~ VARIABLE DECLARATIONS AND INITIALIZATIONS ~~~~~~~~~~~~*/
-int ltAnalogX = 127;
-int ltAnalogY = 127;
-int rtAnalogX = 127;
-int rtAnalogY = 127;
-int analogL2btn = 0;
-int analogR2btn = 0;
-boolean l1 = false;
-boolean r1 = false;
-boolean l3 = false;
-boolean r3 = false;
-boolean tri = false;    
-boolean sqr = false;    
-boolean circ= false;    
-boolean cross= false;   
-boolean dPadUp = false;
-boolean dPadDown = false;
-boolean dPadLeft = false;
-boolean dPadRight = false;
-boolean select = false;
-boolean start = false;
-boolean psBtn = false;
+// Controller inputs
+int ltAnalogX      = 127;
+int ltAnalogY      = 127;
+int rtAnalogX      = 127;
+int rtAnalogY      = 127;
+int analogL2btn    = 0;
+int analogR2btn    = 0;
+boolean l1         = false;
+boolean r1         = false;
+boolean l3         = false;
+boolean r3         = false;
+boolean tri        = false;    
+boolean sqr        = false;    
+boolean circ       = false;    
+boolean cross      = false;   
+boolean dPadUp     = false;
+boolean dPadDown   = false;
+boolean dPadLeft   = false;
+boolean dPadRight  = false;
+boolean select     = false;
+boolean start      = false;
+boolean psBtn      = false;
 
-boolean armToHome = false;
-boolean armHome = true;
-boolean armReady = false;
-boolean autoMode = false;
+boolean armToHome  = false;
+boolean armHome    = true;
+boolean armReady   = false;
+boolean autoMode   = false;
 
-int armBaseAngle = 0;
-int armMidAngle = 0;
-int gripperAngle = 0;
-int armBasePos = 0;
-int armMidPos = 0;
-int gripperPos = 0;
+long armBaseAngle  = 0;
+long armMidAngle   = 0;
+long gripperAngle  = 0;
+long wristAngle    = 0;
+int armBasePos     = 0;
+int armMidPos      = 0;
+int wristPos       = 0;
+int gripperPos     = 0;
 
 unsigned long currentMillis = 0;
 
@@ -135,10 +161,12 @@ void setup() {
   }
   Serial.println(F("\r\nPS3 Bluetooth Library Started"));
 
+  // Start Serial ports
   odrive_serial.begin(115200);
   servo_serial.begin(115200);
   ROS_serial.begin(115200);
 
+  // Set pinmodes
   pinMode(ODriveReset, OUTPUT);
   pinMode(battLED, OUTPUT);
   pinMode(BTconnectLED, OUTPUT);
@@ -152,6 +180,7 @@ void setup() {
   digitalWrite(ODriveReset, HIGH);
   delay(100);
 
+  //wait for ODrive to come online
   odrive_serial << "r vbus_voltage\n";
   while(odrive.readFloat() == 0.00) {
     delay(100);
@@ -161,6 +190,7 @@ void setup() {
   // Once the ODrive is online, battCheck will work
   battCheck();
 
+  //run calibrations
   Serial.println("Calibrating motors . . .");
   int requested_state = ODriveArduino::AXIS_STATE_MOTOR_CALIBRATION;
   odrive.run_state(0, requested_state, false);
@@ -194,50 +224,43 @@ void setup() {
   } while (stateCheck != 0 || --timeout_ctr > 0);
   
   if(timeout_ctr > 0) Serial.println("Motors are good to go!");
-  
-  // Wait for PS3 controller to connect
-  if (!PS3.PS3Connected){
-    Serial.println("Waiting for PS3 controller...");
-    unsigned int connectPrevMillis = 0;
-    currentMillis = millis();
-    static boolean BTconnectLEDState = true;
-    digitalWrite(BTconnectLED, HIGH);
-    while (!PS3.PS3Connected){
-      battCheck();
-      Usb.Task();
-      if(currentMillis - connectPrevMillis > 250) {
-        BTconnectLEDState = !BTconnectLEDState;
-      if(BTconnectLEDState){
-      }
-        if(BTconnectLEDState == true){
-          digitalWrite(BTconnectLED, HIGH);
-        }else{
-          digitalWrite(BTconnectLED, LOW);
-        }
-        connectPrevMillis = currentMillis;
-      }
-      //wait for controller to connect
-    }
-    Serial.println("Controller connected");
-    digitalWrite(BTconnectLED, HIGH); 
-  }  
+
+  controllerConnect();
+
+  // Get and set servo positions/angles
+  armBasePos = armBase.readPosition();
+  armMidPos =  armMid.readPosition();
+  wristPos = wrist.readPosition();
+  gripperPos = gripper.readPosition();
+
+  armBaseAngle = map(armBasePos, 0, 1023, -165000, 165000);
+  armMidAngle = map(armMidPos, 0, 1023, -165000, 165000);
+  wristAngle = map(wristPos, 0, 1023, -165000, 165000);
+  gripperAngle = map(gripperPos, 0, 1023, -165000, 165000);
 }
 
   
 void loop() {
-  Usb.Task();
   battCheck();
   getCtlInputs();
   inputCtlMod();
 
+  //monitor for shutdown signal
+  if (dPadUp) {
+    digitalWrite(shutdownPin, HIGH);
+    Serial.print("Emergency shutdown signal recieved.");
+    while(1); //halt
+  }
 
-  if (start == true && !armHome) {  //engage auto mode!
+  if (start == true && armHome) {  //toggle auto mode
     autoMode = !autoMode;
   }
-  if (autoMode) {
-    autoModeCtl();
-  }
 
+  //enable control of arm if not in auto mode
+  if (!autoMode) {
+    armCtl;
+  }
+  
   driveCtl();
 }
 
@@ -317,20 +340,20 @@ void driveCtl() {
     LWS = constrain(LWS, -90, 90);
     RWS = constrain(RWS, -90, 90);
 
-    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
+//    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
 
     LWS = map(LWS, -90, 90, -150000, 150000);
     RWS = map(RWS, -90, 90, -150000, 150000);
     
-    Serial << "Wheel after mapping: \tLT: " << LWS << "\tRT: " << RWS << '\n';
+//    Serial << "Wheel after mapping: \tLT: " << LWS << "\tRT: " << RWS << '\n';
     
   }else {
-    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
+//    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
 
     LWS = map(LWS, -128, 128, -60000, 60000);
     RWS = map(RWS, -128, 128, -60000, 60000);
 
-    Serial << "Wheel after mapping:\t LT: " << LWS << "\tRT: " << RWS << '\n';
+//    Serial <<"Wheel after mapping:\t LT: " << LWS << "\tRT: " << RWS << '\n';
   }
   
   odrive.SetVelocity(0, LWS);
@@ -339,10 +362,9 @@ void driveCtl() {
 }
 
 void armCtl() {
-/*Controls the arm. Angles are represented as multiples of 100, so 10 degrees = 1000.
+/*Controls the arm. Angles are represented as multiples of 100.
  */
   static unsigned long armPrevMillis = 0;
-  currentMillis = millis();
   if(select){
     armToHome = !armToHome; //toggle arm home state if button is pressed
   }
@@ -350,34 +372,38 @@ void armCtl() {
     deactivateArm();
   }else if (!armToHome && !armReady){  //test to see if the arm was just activated
     activateArm();
-  }else if (armReady && currentMillis - armPrevMillis > 20){  //If the arm is active, enable control. The timer is necessary to keep input speed constant regardless of loop speed
-    armPrevMillis = currentMillis;
-    if (rtAnalogY > 0){
+  }else if (armReady && millis() - armPrevMillis > servoUpdateSpeed * 10){  //If the arm is active, and ready, enable control. The timer helps keep input speed constant regardless of loop speed
+    if (rtAnalogY != 0) {
       armBaseAngle = armBaseAngle + rtAnalogY / 2;
+      armBaseAngle  = constrain(armBaseAngle, armBaseAngleLimit[0], armBaseAngleLimit[1]);
+      armBasePos = map(armBaseAngle, -165000, 165000, 0, 1023);
+      armBase.setPosition(armBasePos, servoUpdateSpeed);
     }
-    if (rtAnalogY < 0) {
-      armBaseAngle = armBaseAngle + rtAnalogY /2;
+    if (analogL2btn != 0) {
+      armMidAngle = armMidAngle + (analogL2btn - analogR2btn) / 4;
+      armMidAngle = constrain(armMidAngle, armMidAngleLimit[0], armMidAngleLimit[1]);
+      armMidPos = map(armMidAngle, -165000, 165000, 0, 1023);
+      armMid.setPosition(armMidPos, servoUpdateSpeed);
     }
-    armBaseAngle = constrain(armBaseAngle,2000,22088);  //constrain angle to valid number, and keep it from crashing into itself
-    
-    if (analogL2btn > 0){
-      armMidAngle = armMidAngle + (analogL2btn /  4);
-    }else if (analogR2btn > 0){
-      armMidAngle = armMidAngle - (analogR2btn / 4);
+    if (rtAnalogX != 0) {
+      wristAngle = wristAngle + rtAnalogX/2;
+      wristAngle = constrain(wristAngle, wristAngleLimit[0], wristAngleLimit[1]);
+      wristPos = map(wristAngle,  -165000, 165000, 0, 1023);
+      wrist.setPosition(wristPos, servoUpdateSpeed);
     }
-    armMidAngle = constrain(armMidAngle,2000,27000);  //constrain angle to valid number, and keep it from crashing into itself
-    
-    if (l1 == true){
-      gripperAngle = gripperAngle + 100;
+    if (l1 == true || r1 == true) {
+      if (l1 == true && r1 == false) {
+        gripperAngle = gripperAngle + 100;
+      }else if (r1 == true && l1 == false) {
+        gripperAngle = gripperAngle - 100;
+      }
+      gripperAngle = constrain(gripperAngle, gripperAngleLimit[0], gripperAngleLimit[1]);
+      gripperPos = map(gripperAngle, -165000, 165000, 0, 1023);
+      gripper.setPosition(gripperPos, servoUpdateSpeed); 
+  
+      armPrevMillis = millis();
     }
-    if (r1 == true){
-      gripperAngle = gripperAngle - 100;
-    }
-   gripperAngle = constrain(gripperAngle,700,10000);
-   
-   moveServos(5000);
   }
-//  Serial.print(armBaseAngle);
 }
 
 
@@ -385,15 +411,12 @@ void autoModeCtl() {
   
 }
 
-  
-
-
-
 void getCtlInputs () {
 /*This function gets all the control inputs from the PS3 controller. It would probably
  * be faster to only request each input as it is needed, but this is clean and simple.
  * In the meantime, comment out any inputs that arent needed by the robot.
  */
+  Usb.Task();
   if (PS3.PS3Connected) {
       ltAnalogX = PS3.getAnalogHat(LeftHatX);  // get right stick X and Y positions and center on zero
       ltAnalogY = PS3.getAnalogHat(LeftHatY);
@@ -439,29 +462,11 @@ void getCtlInputs () {
     start = false;
     select = false;
     psBtn = false;
-    Serial.println("Waiting for PS3 controller...");
-    unsigned int connectPrevMillis = 0;
-    currentMillis = millis();
-    boolean BTconnectLEDon = true;
-    digitalWrite(BTconnectLED, HIGH);
-    while (!PS3.PS3Connected){
-      battCheck();
-      Usb.Task();
-      if(currentMillis - connectPrevMillis > 250) {
-        BTconnectLEDon = !BTconnectLEDon;
-        if(BTconnectLEDon){
-          digitalWrite(BTconnectLED, HIGH);
-        }else{
-          digitalWrite(BTconnectLED, LOW);
-        }
-        connectPrevMillis = currentMillis;
-      }
-      //wait for controller to connect
-    }
-    Serial.println("Controller connected");
-    digitalWrite(BTconnectLED, HIGH);
+    
+    controllerConnect();
   }
 }
+
 
 void inputCtlMod () {
   /*This function centers analog stick inputs on zero, flips the necessary axes,
@@ -498,247 +503,236 @@ void inputCtlMod () {
 //  Serial << "Axis values after deadzone: X: " << ltAnalogX << "\tY: " << ltAnalogY << '\n';
 }
 
-////void moveServos(int inc) {
-///*This function moves the servos towards the target position determined by other functions.
-// * "inc" is the number of increments to move during each interval.
-// * It maps the target position to the length of the servo input pulses, and slows movement
-// * as the arm approaches a zero position to reduce the likelyhood of part interferance and
-// * damage. In order to avoid time consuming floating math while still enabling higher control
-// * resolution, angles are represented in multiples of 100, so 10 degrees is input as 1000, 
-// * and 270 degrees is input as 27000.
-// */
-//  static int armBasePos = 0;
-//  static int armBase0Pos = 0;
-//  static int armBase1Pos = 0;
-//  static int armMidPos = 0;
-//  static int gripperPos = 0;
-//  static unsigned long servoPrevMillis = 0;
-//  currentMillis = millis();
-//  if (currentMillis - servoPrevMillis > 20) { //the default Servo.h library won't refresh a servo any faster than every 20ms by default. To take advantage of a refresh rate this fast, the library requires editing. Our servos are not good enough to warrant this effort
-//
-//    if (armBase0.attached() && armBase1.attached()) {  //ensure servo isn't killed before trying to move it. This also prevents position from changing while the servo is detached, which can result in position jumps when it is enabled again.
-//      if (armBaseAngle > armBasePos) {
-//        armBasePos = armBasePos + inc; 
-//        armBasePos = constrain(armBasePos, 0, armBaseAngle); //prevent position from overshooting angle
-//      }else if (armBaseAngle < armBasePos) {
-//        if (armBasePos > 1000){
-//          armBasePos = armBasePos - inc;
-//          armBasePos = constrain(armBasePos, armBaseAngle, 27000);
-//        }else{
-//          armBasePos = armBasePos - 20;
-//          armBasePos = constrain(armBasePos, armBaseAngle, 27000);
-//        }
-//      }
-//    if(armBase0Invert == true){
-//      armBase0Pos = map(armBasePos, 0, 27000, 27000, 0); //swap direction of servo movement
-//    }else{
-//      armBase0Pos = armBasePos;
-//    }
-//    if(armBase1Invert == true){
-//      armBase1Pos = map(armBasePos,  0, 27000, 27000, 0); //swap direction of servo movement
-//    }else {
-//      armBase1Pos = armBasePos;
-//    }
-//    armBase0.writeMicroseconds(map(armBase0Pos + armBase0Trim, 0, 27000, servoMinus, servoMaxus));
-//    armBase1.writeMicroseconds(map(armBase1Pos + armBase1Trim, 0, 27000, servoMinus, servoMaxus));
-//    }else{
-//      armBaseAngle = armBasePos;
-//    }
-//
-//    if (armMid.attached()) {  //ensure servo isn't killed before trying to move it. This also prevents position from changing while the servo is detached, which can result in position jumps when it is enabled again.
-//      if (armMidAngle > armMidPos) {
-//        armMidPos = armMidPos + inc; 
-//        armMidPos = constrain(armMidPos, 0, armMidAngle); //prevent position from overshooting angle
-//      }
-//      else if (armMidAngle < armMidPos) {
-//        if (armMidPos > 1000){
-//          armMidPos = armMidPos - inc;
-//          if(armMidPos < armMidAngle){  //using the constrain here like I did everywhere else prevented it from uploading . . . hence the if statement
-//            armMidPos = armMidAngle;
-//          }
-//        }
-//        else{
-//          armMidPos = armMidPos - 20;
-//          armMidPos = constrain(armMidPos, armMidAngle, 27000);
-//        }
-//      }
-//    if(armMidInvert == true){
-//      armMidPos = map(armMidPos,  0, 27000, 27000, 0); //swap direction of servo movement
-//    }
-//    armMid.writeMicroseconds(map(armMidPos, 0 ,27000, servoMinus, servoMaxus));
-//    }else{
-//      armMidAngle = armMidPos;
-//    }
-//    
-//    if(gripper.attached()) {
-//      if (gripperAngle > gripperPos) {
-//        gripperPos = gripperPos + inc;
-//        gripperPos = constrain(gripperPos, 0, gripperAngle);
-//      }else if (gripperAngle < gripperPos){
-//        gripperPos = gripperPos - inc;
-//        gripperPos = constrain(gripperPos, gripperAngle, 27000);
-//      }
-//    if(gripperInvert == true){
-//      gripperPos = map(gripperPos,  0, 27000, 27000, 0); //swap direction of servo movement
-//    }
-//    gripper.writeMicroseconds(map(gripperPos, 0, 27000, servoMinus, servoMaxus));
-//    }else{
-//      gripperAngle = gripperPos;
-//    }
-//    servoPrevMillis = millis();
-//    if (armToHome && armBasePos == 0 && armMidPos == 0 && gripperPos == gripperAngle){
-//      armHome = true;
-//    }
-//    if(!armToHome && armBasePos == armBaseAngle && armMidPos == armMidAngle){
-//      armReady = true;
-//    }
-//  }
-//}
 
-//void deactivateArm() {
-///*This function sends the arm to the home (collapsed) position, turns off servo
-// * position input, and kills power to the servos.
-// */
-//  if(select){  //arm was just deactivated
-//    armReady = false;
-//    armHome = false;    
-//  }
-//  
-//  armBaseAngle = 0;
-//  armMidAngle = 0;
-//
-//  if(armHome && armBase0.attached()) {
-//   digitalWrite(armBase0Enable, LOW);
-//   digitalWrite(armBase1Enable, LOW);
-//   digitalWrite(armMidEnable, LOW);
-//   digitalWrite(gripperEnable, LOW);
-//   armBase0.detach();
-//   armBase1.detach();
-//   armMid.detach();
-//   gripper.detach();
-//  }else if(!armHome){
-//    moveServos(50);
-//  }
-////  Serial.print(digitalRead(limSwA));
-////  Serial.println(digitalRead(limSwB));
-////  Serial.println();
-//}
+void deactivateArm() {
+/*This function sends the arm to the home (collapsed) position, and sets servo speeds to zero
+ */
+  static unsigned long deactivateMillis = 0;
+  
+  if(select){  //run first bit only when arm is first deactivated
+    armReady = false;
+    armHome = false;    
 
-//void activateArm() {
-///*This function turns on power to the servos, and moves the arm to a ready position*/
-//  if (armHome && select) {  //Was the arm fully home when it was activated?
-//    armHome = false;
-//    armReady = false;
-//    digitalWrite(armBase0Enable, HIGH);  //connect power and attach servo
-//    digitalWrite(armBase1Enable, HIGH);
-//    digitalWrite(armMidEnable, HIGH);
-//    digitalWrite(gripperEnable, HIGH);
-//    armBase0.attach(armBase0Pin);
-//    armBase1.attach(armBase1Pin);
-//    armMid.attach(armMidPin);
-//    gripper.attach(gripperPin);
-//    }    
-//    if (armBasePos < 3000) {
-//      armBaseAngle = 3000;
-//    }
-//    if (armMidPos < 3000) {
-//      armMidAngle = 3000;
-//    }
-//  moveServos(50);
-//}
+    //map ome angles to home positions
+    armBasePos = map(armBaseHomeAngle, -165000, 165000, 0, 1023);
+    armMidPos = map(armMidHomeAngle, -165000, 165000, 0, 1023);
+    wristPos = map(wristHomeAngle, -165000, 165000, 0, 1023);
+    gripperPos = map(gripperHomeAngle, -165000, 165000, 0, 1023);
+
+    //send servos to home position
+    armBase.setPosition(armBasePos, 500);
+    armMid.setPosition(armMidPos, 500);
+    wrist.setPosition(wristPos,200);
+    gripper.setPosition(gripperPos, 100);
+  }
+  if (!armHome && millis() - deactivateMillis > 1000) { //run the following check once per second
+    //check if servos are at home position
+    boolean servosHome[4] = {false, false, false, false};
+    int servoPos[4];
+    servoPos[0] = armBase.readPosition();
+    servoPos[1] = armMid.readPosition();
+    servoPos[2] = wrist.readPosition();
+    servoPos[3] = gripper.readPosition();
+    
+    if (servoPos[0] > (armBasePos - 2) && servoPos[0] < (armBasePos + 2)) {
+      servosHome[0] = true;
+      armBase.setSpeed(0);
+    }
+    if (servoPos[1] > (armMidPos - 2) && servoPos[1] < (armMidPos + 2)) {
+      servosHome[1] = true;
+      armMid.setSpeed(0);
+    }
+    if (servoPos[2] > (wristPos - 2) && servoPos[2] < (wristPos + 2)) {
+      servosHome[2] = true;
+      wrist.setSpeed(0);
+    }
+    if (servoPos[3] > (gripperPos - 2) && servoPos[3] < (gripperPos + 2)) servosHome[3] = true;
+  
+    //if servos are in position, call it ready
+    if (servosHome[0] && servosHome[1] && servosHome[2] && servosHome[3]) armHome = true;
+  }
+  deactivateMillis = millis();
+}
+
+void activateArm() {
+/*This function turns on power to the servos, and moves the arm to a ready position*/
+static unsigned long activateMillis = 0;
+
+  if (select) {  //run  first bit only when arm is first activated
+    armHome = false;
+    armReady = false;
+
+    //map ready angles to ready positions
+    armBasePos = map(armBaseReadyAngle, -165000, 165000, 0, 1023);
+    armMidPos = map(armMidReadyAngle, -165000, 165000, 0, 1023);
+    wristPos = map(wristReadyAngle, -165000, 165000, 0, 1023);
+    gripperPos = map(gripperReadyAngle, -165000, 165000, 0, 1023);
+
+    //send servos to ready position
+    armBase.setPosition(armBasePos, 500);
+    armMid.setPosition(armMidPos, 500);
+    wrist.setPosition(wristPos,200);
+    gripper.setPosition(gripperPos, 100);
+  }
+  
+  if (millis - activateMillis > 1000) { //run the following check once per second
+    //check if servos are at ready position
+    boolean servosReady[4] = {false, false, false, false};
+    int servoPos[4];
+    servoPos[0] = armBase.readPosition();
+    servoPos[1] = armMid.readPosition();
+    servoPos[2] = wrist.readPosition();
+    servoPos[3] = gripper.readPosition();
+    
+    if (servoPos[0] > (armBasePos - 2) && servoPos[0] < (armBasePos + 2)) servosReady[0] = true;
+    if (servoPos[1] > (armMidPos - 2) && servoPos[1] < (armMidPos + 2)) servosReady[1] = true;
+    if (servoPos[2] > (wristPos - 2) && servoPos[2] < (wristPos + 2)) servosReady[2] = true;
+    if (servoPos[3] > (gripperPos - 2) && servoPos[3] < (gripperPos + 2)) servosReady[3] = true;
+  
+    //if servos are in position, call it ready
+    if (servosReady[0] && servosReady[1] && servosReady[2] && servosReady[3]) armReady = true;
+  }
+  activateMillis = millis();
+}
 
 void battCheck(){
-/* This function averages the battery voltage with 10 samples over a 2.5 second period.
- * An LED flashes at a frequency dependent on the level of battery depletion.
- * Below a critical voltage, the mechanics of the robot are shut down and the program is halted.
+/* This function samples the battery voltage at intervals
+ *  and averages a number of samples before assigning 
+ *  actions based on defined warning levels. Settings are
+ *  defined at the top of the sketch.
  */
-  static unsigned long sensePrevMillis = 0;
-  static unsigned long battPrevMillis = 0;
+  //create array to store voltage samples
+  static int sampleArray[battNumSamples];
+
+  static int sampleCount = 0;
+
+  static int sampleCurrent;
+  static long sampleSum;
+  static int sampleAvg;
+  static byte battCode = 2;  //condition code for battery level. 0 = good, 1 = low, 2 = very low, 3 = critical
+
+  static unsigned long samplePrevMillis = 0;
+  static unsigned long flashPrevMillis = 0;
   static int battLEDState = LOW;
-  static int battLevel = 0;
-  static int battLevel0 = battWarn1;
-  static int battLevel1 = battWarn1;
-  static int battLevel2 = battWarn1;
-  static int battLevel3 = battWarn1;
-  static int battLevel4 = battWarn1;
-  static int battLevel5 = battWarn1;
-  static int battLevel6 = battWarn1;
-  static int battLevel7 = battWarn1;
-  static int battLevel8 = battWarn1;
-  static int battLevel9 = battWarn1;
-  static int i = 0;
-
-  odrive_serial << "r vbus_voltage\n";
-  battLevel = map(odrive.readFloat(),0,26,0,1023);
   
-  currentMillis = millis();  
-  if (currentMillis - sensePrevMillis >= 250){  //Check battery voltage 4 times per second
-    switch (i){  //store one reading per iteration, and average. there's probably a better way to do this with a for loop and an array or something, but this works.
-      case 0:
-        battLevel0 = battLevel;
-        break;
-      case 1:
-        battLevel1 = battLevel;
-        break;
-      case 2:
-        battLevel2 = battLevel;
-        break;
-      case 3:
-        battLevel3 = battLevel;
-        break;
-      case 4:
-        battLevel4 = battLevel;
-        break;
-      case 5:
-        battLevel5 = battLevel;
-        break;
-      case 6:
-        battLevel6 = battLevel;
-        break;
-      case 7:
-        battLevel7 = battLevel;
-        break;
-      case 8:
-        battLevel8 = battLevel;
-        break;
-      case 9:
-        battLevel9 = battLevel;
-        break;
+  // pseudo setup(), so we can innitialize the array and sum without having to make 
+  // all these variables global
+  static boolean firstRun = true;
+  if (firstRun) {
+    for (int i = 0; i < battNumSamples; i++) {
+      sampleArray[i] = battWarn1;
     }
 
-    //average all the values over the last 2.5 seconds
-    battLevel = (battLevel0 + battLevel1 + battLevel2 + battLevel3 + battLevel4 + battLevel5 + battLevel6 + battLevel7 + battLevel8 + battLevel9) / 10;
-//    Serial << "Battery Voltage: " << battLevel << '\n';
+    sampleSum = (long) battWarn1 * battNumSamples;
+
+    digitalWrite(battLED, battLEDState);
     
-    if (i <= 9){
-      i = ++i;
-    }else{
-      i=0;
-    }
-    sensePrevMillis = currentMillis;  
+    firstRun = false;
   }
 
-  //take actions based on battery level
-  if (battLevel < battCritical){
-    Serial << "Battery critically low. Shutting down . . . \n";
-    digitalWrite(shutdownPin, HIGH);
-    while(1); //halt
-  }else if((battLevel < battWarn2) && (currentMillis - battPrevMillis >= 250)){  //flash fast
-    Serial << "Battery very low.\n";
-    battLEDState = !battLEDState;
-    digitalWrite(battLED, battLEDState);
-    battPrevMillis = currentMillis;
-  }else if((battLevel < battWarn1) && (currentMillis - battPrevMillis >= 1500)){  //flash slow
-    Serial << "Battery low.\n";
-    battLEDState = !battLEDState;
-    digitalWrite(battLED, battLEDState);
-    battPrevMillis = currentMillis;
-  }else if ((battLevel > battWarn1) && (battLEDState == HIGH)){  //if the battery is good, turn the LED off.
-    battLEDState = LOW;
-    digitalWrite(battLED, battLEDState);
+  //sample battery voltage and assign condition code once every interval
+  if (millis() - samplePrevMillis >= battSampleInterval) {
+    samplePrevMillis = millis();
+
+    //sample battery voltage
+    odrive_serial << "r vbus_voltage\n";
+    sampleCurrent = map(odrive.readFloat(),0,26,0,1023);
+
+    //update sum
+    sampleSum = sampleSum - sampleArray[sampleCount] + sampleCurrent;
+
+    //update sample array
+    sampleArray[sampleCount] = sampleCurrent;
+
+    //update average
+    sampleAvg = sampleSum / battNumSamples;
+
+    //update condition code
+    if (sampleAvg < battCritical) {
+      battCode = 3;
+    }else if (sampleAvg < battWarn2) {
+      battCode = 2;
+    }else if (sampleAvg < battWarn1) {
+      battCode = 1;
+    }else battCode = 0;
+
+    //increment sample count
+    if (sampleCount < battNumSamples - 1) {
+      sampleCount++;
+    }else sampleCount = 0;
+
+//    //debugging
+//    Serial.print("Sample value: ");
+//    Serial.println(sampleCurrent);
+//    Serial.print("Sample history: ");
+//    for (int i = 0; i < battNumSamples; i++) {
+//      Serial.print(sampleArray[i]);
+//      Serial.print('\t');
+//    }
+//    Serial.println();
+//    Serial.print("\t Sample sum: ");
+//    Serial.print(sampleSum);
+//    Serial.print("\t\tSample average: ");
+//    Serial.println(sampleAvg);
+//    Serial.println();
+  }
+
+  //take action based on condition code
+  switch (battCode) {
+    case 3:
+//      Serial.println("Battery critically low. Shutting down . . .");
+      digitalWrite(shutdownPin, HIGH);
+      digitalWrite(battLED, HIGH);
+      while(1); //halt
+      break;
+    case 2:
+      if (millis() - flashPrevMillis >= battFlashInterval2) {
+//        Serial.println("Battery very low.");
+        battLEDState = !battLEDState;
+        digitalWrite(battLED, battLEDState);
+        flashPrevMillis = millis();
+      }
+      break;
+    case 1:
+      if (millis() - flashPrevMillis >= battFlashInterval1) {
+//        Serial.println("Battery low.");
+        battLEDState = !battLEDState;
+        digitalWrite(battLED, battLEDState);
+        flashPrevMillis = millis();
+      }
+      break;
+    case 0:
+      if (battLEDState == HIGH) {
+        battLEDState = LOW;
+        digitalWrite(battLED, battLEDState);
+      }
+      break;
   }
 }
 
-boolean odriveCheck (){
+boolean odriveCheck(){
   //use this function to check the axis, motors, and encoders for errors, as well as for the correct control modes
+}
+
+void controllerConnect() {
+  // Wait for PS3 controller to connect
+  if (!PS3.PS3Connected){
+    Serial.println("Waiting for PS3 controller...");
+    unsigned long connectPrevMillis = 0;
+    static int BTconnectLEDState = HIGH;
+    digitalWrite(BTconnectLED, HIGH);
+    while (!PS3.PS3Connected){
+      battCheck();
+      Usb.Task();
+      if (millis() - connectPrevMillis > 250) {
+        connectPrevMillis = millis();
+        BTconnectLEDState = !BTconnectLEDState;
+        digitalWrite(BTconnectLED, BTconnectLEDState);
+      }
+      delay(10);
+    }
+    Serial.println("Controller connected");
+    BTconnectLEDState = HIGH;
+    digitalWrite(BTconnectLED, BTconnectLEDState); 
+  }    
 }
