@@ -3,7 +3,7 @@
 #define NUM_SENSORS     3      // number of sensors in each array
 #define TIMEOUT         2500   // wait for 2500 microsecodns for sensor outputs to go low
 #define NUM_SAMPLES     10    // how many samples over which to spread the running average.
-#define MIN_VALUE       200        //sets minimum threshold for brightness
+#define MIN_VALUE       300        //sets minimum threshold for brightness
 #define MAX_VALUE       2300       //sets max threshold for blackness
 #define ltLED           8
 #define rtLED           9
@@ -146,16 +146,16 @@ void loop() {
 //    Serial.print('\t');
 //  }
 //  Serial.println();
-//  
-//  Serial.println("Sensor Averages");
-//  for (int i = 0; i < NUM_SENSORS; i++) {
-//    Serial.print(ltValuesAvg[i]);
-//    Serial.print('\t');
-//  }
-//  for (int i = 0; i < NUM_SENSORS; i++) {
-//    Serial.print(rtValuesAvg[i]);
-//    Serial.print('\t');
-//  }
-//  Serial.println('\n');
+  
+  Serial.println("Sensor Averages");
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    Serial.print(ltValuesAvg[i]);
+    Serial.print('\t');
+  }
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    Serial.print(rtValuesAvg[i]);
+    Serial.print('\t');
+  }
+  Serial.println('\n');
 //  delay(1000);
 }
