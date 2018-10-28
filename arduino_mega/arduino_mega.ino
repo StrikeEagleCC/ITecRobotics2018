@@ -58,13 +58,13 @@ const byte ltTargetDetect  = 20;
 const byte rtTargetDetect  = 21;
 
 /*~~~~~~~~~~~~~~~~~~~~~~ CONTROLLER SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~*/
-int ltAnalogXDeadZone = 10;  //set deazone ranges each axis on each stick. Values will probably be less than 10
-int ltAnalogYDeadZone = 10;
-int rtAnalogXDeadZone = 50;
-int rtAnalogYDeadZone = 50;
+int ltAnalogXDeadZone[2] = {115, 147};  //First value is lower threshold of deadzone, second is high threshold. Use the PS3BT example to find these values experimentally.
+int ltAnalogYDeadZone[2] = {103, 142};
+int rtAnalogXDeadZone[2] = {115, 147};
+int rtAnalogYDeadZone[2] = {115, 150};
 int analogL2DeadZone = 0;
 int analogR2DeadZone = 0;
-float ltAnalogXScaler = 1;  //scales down the input from the axes. Values range from 0-1
+float ltAnalogXScaler = .4;  //scales down the input from the axes. Values range from 0-1
 float ltAnalogYScaler = 1;
 float rtAnalogXScaler = 1;
 float rtAnalogYScaler = 1;
@@ -195,7 +195,7 @@ void setup() {
 
   // Start Serial ports 
   Serial.begin(115200);
-  //odrive_serial.begin(115200);
+  odrive_serial.begin(115200);
   servo_serial.begin(115200);
   //ROS_serial.begin(115200); 
 
@@ -243,6 +243,10 @@ void loop() {
   // Monitor for shutdown signal
   if (dPadUp) {
     digitalWrite(shutdownPin, HIGH);
+    armBase.torqueOff();
+    armMid.torqueOff();
+    wrist.torqueOff();
+    gripper.torqueOff();
     Serial.print(F("Emergency shutdown signal recieved."));
     while(1); //halt
   }
@@ -264,7 +268,7 @@ void loop() {
 
 //  ROScomm();
   
-//  driveCtl();
+  driveCtl();
 
 //  static unsigned long loopcounter = 0;
 //  if (loopcounter % 1000 == 0) Serial.println(loopcounter);
@@ -301,7 +305,7 @@ void driveCtl() {
       
   //Serial << "Steering Angle: \t" << (steeringTheta * 57.2957) << "\tVelocity Magnituded: \t" << driveR << "\n\n";
   
-  steeringTheta = steeringTheta - .7854;  // rotate vector 45 degrees (pi/4)
+  steeringTheta = steeringTheta - (PI / 4);  // rotate vector 45 degrees (pi/4)
   
   long LWS = 0;
   long RWS = 0;
@@ -389,6 +393,8 @@ static unsigned long buzzerMillis = 0;
     buzzerMillis = millis();
     tone(buzzer, 500, 250);
   }
+  steeringThetaAuto = PI;
+  driveRAuto = 63;
 }
 
 void autoModeSwitch() {
@@ -517,41 +523,37 @@ void inputCtlMod () {
   /*This function centers analog stick inputs on zero, flips the necessary axes,
    * applies deadzones, and scales inputs.
    */
+  // Apply Deazones
+  if (ltAnalogY < ltAnalogYDeadZone[0]) {
+    ltAnalogY = map(ltAnalogY, 0, ltAnalogYDeadZone[0], 0, 127);
+  }else if (ltAnalogY > ltAnalogYDeadZone[1]) {
+    ltAnalogY = map(ltAnalogY, ltAnalogYDeadZone[1], 255, 128, 255);
+  }else ltAnalogY = 127;
+
+  if (ltAnalogX < ltAnalogXDeadZone[0]) {
+    ltAnalogX = map(ltAnalogX, 0, ltAnalogXDeadZone[0], 0, 127);
+  }else if (ltAnalogX > ltAnalogXDeadZone[1]) {
+    ltAnalogX = map(ltAnalogX, ltAnalogXDeadZone[1], 255, 128, 255);
+  }else ltAnalogX = 127;
+
+
+  if (rtAnalogY < rtAnalogYDeadZone[0]) {
+    rtAnalogY = map(rtAnalogY, 0, rtAnalogYDeadZone[0], 0, 127);
+  }else if (rtAnalogY > rtAnalogYDeadZone[1]) {
+    rtAnalogY = map(rtAnalogY, rtAnalogYDeadZone[1], 255, 128, 255);
+  }else rtAnalogY = 127;
+
+  if (rtAnalogX < rtAnalogXDeadZone[0]) {
+    rtAnalogX = map(rtAnalogX, 0, rtAnalogXDeadZone[0], 0, 127);
+  }else if (rtAnalogX > rtAnalogXDeadZone[1]) {
+    rtAnalogX = map(rtAnalogX, rtAnalogXDeadZone[1], 255, 128, 255);
+  }else rtAnalogX = 127;
+  
   ltAnalogX = ltAnalogX - 127; //center on zero
   ltAnalogY = ltAnalogY - 127;
   rtAnalogX = rtAnalogX - 127;
   rtAnalogY = map(rtAnalogY, 0, 255, 255, 0) - 127;  //flip input direction and center on zero
 
-//  Serial << "Axis values before deadzone: X: " << ltAnalogX << "\tY: " << ltAnalogY << '\n';
-  
-  if(ltAnalogX >=0){
-    ltAnalogX = constrain(ltAnalogX,ltAnalogXDeadZone,128);  //apply deadzones
-    ltAnalogX = map(ltAnalogX,ltAnalogXDeadZone,128,0,128 * ltAnalogXScaler); //scale and expand
-  }else{
-    ltAnalogX = constrain(ltAnalogX,-128,-ltAnalogXDeadZone);
-    ltAnalogX = map(ltAnalogX,-128,-ltAnalogXDeadZone,-128 * ltAnalogXScaler,0);
-  }
-  if(ltAnalogY >=0){
-    ltAnalogY = constrain(ltAnalogY,ltAnalogYDeadZone,128);
-    ltAnalogY = map(ltAnalogY,ltAnalogYDeadZone,128,0,128 * ltAnalogYScaler);
-  }else{
-    ltAnalogY = constrain(ltAnalogY,-128,-ltAnalogYDeadZone);
-    ltAnalogY = map(ltAnalogY,-128,-ltAnalogYDeadZone,-128 * ltAnalogYScaler,0);
-  }  
-  if(rtAnalogX >=0){
-    rtAnalogX = constrain(rtAnalogX,rtAnalogXDeadZone,128);  //apply deadzones
-    rtAnalogX = map(rtAnalogX,rtAnalogXDeadZone,128,0,128 * rtAnalogXScaler); //scale and expand
-  }else{
-    rtAnalogX = constrain(rtAnalogX,-128,-rtAnalogXDeadZone);
-    rtAnalogX = map(rtAnalogX,-128,-rtAnalogXDeadZone,-128 * rtAnalogXScaler,0);
-  }
-  if(rtAnalogY >=0){
-    rtAnalogY = constrain(rtAnalogY,rtAnalogYDeadZone,128);
-    rtAnalogY = map(rtAnalogY,rtAnalogYDeadZone,128,0,128 * rtAnalogYScaler);
-  }else{
-    rtAnalogY = constrain(rtAnalogY,-128,-rtAnalogYDeadZone);
-    rtAnalogY = map(rtAnalogY,-128,-rtAnalogYDeadZone,-128 * rtAnalogYScaler,0);
-  }
 
 //  Serial << "Axis values after deadzone: X: " << ltAnalogX << "\tY: " << ltAnalogY << '\n';
 }
@@ -662,9 +664,7 @@ void battCheck(){
 
     //sample battery voltage
     odrive_serial << "r vbus_voltage\n";
-//    sampleCurrent = map(odrive.readFloat(),0,26,0,1023);
-
-sampleCurrent = battWarn1-1;
+    sampleCurrent = map(odrive.readFloat(),0,26,0,1023);
 
     //update sum
     sampleSum = sampleSum - sampleArray[sampleCount] + sampleCurrent;
