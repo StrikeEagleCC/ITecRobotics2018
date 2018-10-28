@@ -18,22 +18,30 @@ template<>        inline Print& operator <<(Print &obj, float arg) { obj.print(a
 
 
 /*~~~~~~~~~~~~~~~~~~ USB SHIELD AND DONGLE SETUP ~~~~~~~~~~~~~~~~~~~~*/
+/* See the PS3BT example sketch from the USB Host Sheild library for more 
+ *  information on this setup.
+ */
 USB Usb;
 BTD Btd(&Usb); // create the Bluetooth Dongle instance
 PS3BT PS3(&Btd, 0x00, 0x1A, 0x7D, 0xDA, 0x71, 0x13); // This is the dongles adress. It will change with different dongles.
 
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~ ODRIVE SETUP ~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+/* #define statements are like copy/paste instructions. Before compiling,
+ *  the Arduino IDE will, in this case, replace "odrive_serial" with
+ *  "Serial3", and then compile. This improves human readability, and 
+ *  makes it easier to change the serial port if we want to.
+ */
 #define odrive_serial Serial3
 
-// ODrive object
+// Create ODrive object
 ODriveArduino odrive(odrive_serial);
 
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~ SERVO SETUP ~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 #define servo_serial Serial2
 
-// Servo objects
+// Create servo objects
 XYZrobotServo armBase(servo_serial, 4);
 XYZrobotServo armMid(servo_serial, 3);
 XYZrobotServo wrist(servo_serial, 2);
@@ -44,6 +52,9 @@ XYZrobotServo gripper(servo_serial, 1);
 #define ROS_serial Serial1
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ PINOUT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+/* When using the USB Host Shiled (or any shield that uses the ICSP header),
+ *  pins 50-53 should not be used, since they are connected to ICSP.
+ */
 // Indicators
 const byte battLED0        = 49;
 const byte BTconnectLED    = 13;
@@ -58,13 +69,20 @@ const byte ltTargetDetect  = 20;
 const byte rtTargetDetect  = 21;
 
 /*~~~~~~~~~~~~~~~~~~~~~~ CONTROLLER SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~*/
-int ltAnalogXDeadZone[2] = {115, 147};  //First value is lower threshold of deadzone, second is high threshold. Use the PS3BT example to find these values experimentally.
+/*The deadzones are stored as arrays, where the first value is lower than
+ * the lowest the applicable axis can achieve without touching the joystick.
+ * The second value is the highest. You can find these numbers for any
+ * controller by uploading the PS3BT example sketch and observing the serial
+ * monitor while moving the sticks around.
+ */
+int ltAnalogXDeadZone[2] = {115, 147};
 int ltAnalogYDeadZone[2] = {103, 142};
 int rtAnalogXDeadZone[2] = {115, 147};
 int rtAnalogYDeadZone[2] = {115, 150};
-int analogL2DeadZone = 0;
+int analogL2DeadZone = 0; //the L2 sticks only need a single value, since they rest at one extreme of their physical travel.
 int analogR2DeadZone = 0;
-float ltAnalogXScaler = .4;  //scales down the input from the axes. Values range from 0-1
+
+float ltAnalogXScaler = .3;  //scales down the input from the axes. Values range from 0-1
 float ltAnalogYScaler = 1;
 float rtAnalogXScaler = 1;
 float rtAnalogYScaler = 1;
@@ -90,11 +108,19 @@ int armMidReadyPos   = 745;
 int wristReadyPos    = 511;
 int gripperReadyPos  = 553;
 
+/* Position limits are stored as arrays. The first value is the lowest a
+ *  servo can safely move given it's construction, and the second value
+ *  is the highest. These values can be determined by running the "Servo Position" 
+ *  sketch, and watching the serial monitor while manipulating the servos manually.
+ */
 int armBasePosLimit[2]  = {251,934};  // low and high limits, respectively
 int armMidPosLimit[2]   = {20, 780};
 int wristPosLimit[2]    = {244, 641};
 int gripperPosLimit[2]  = {84, 553};
 
+/* This variable helps to keep servo response speed consistent regardless
+ *  of how fast loop() is running.
+ */
 unsigned int servoUpdateSpeed  = 2; //in 10's of milliseconds (2 = 20ms)
 
 
@@ -167,6 +193,7 @@ void setup() {
    *  to power up and communicate correctly. Pulling the Tx pin high was 
    *  determined experimentally to be necessary. Without doing this, the 
    *  servos would not reliably power up simultaniously with the arduino.
+   *  They still don't always power up reliably, but it's better.
    *  Pulling the Rx pin high is requred to recieve data. This is in the 
    *  servo documentation.
    */
@@ -199,7 +226,11 @@ void setup() {
   servo_serial.begin(115200);
   //ROS_serial.begin(115200); 
 
-  // Turn off servo motors
+  /* Turn off servo motors
+   *  This is done so that if the arduino is reset without resetting
+   *  the servos, they will relax and allow manipulation of the arm and
+   *  can be safely re-initialized.
+   */
   armBase.torqueOff();
   armMid.torqueOff();
   wrist.torqueOff();
@@ -216,6 +247,7 @@ void setup() {
   Serial.println(F("\r\nPS3 Bluetooth Library Started"));
 
   // Reset the ODrive
+  //TODO: timeout?
   resetOdrive();
 
   //connect PS3 controller
@@ -224,9 +256,10 @@ void setup() {
     delay(10);
   }
 
-  Serial.println("getting servo positions");
-  // Get and set servo positions, and calculate angle limits
-  
+  /* Calculate limit angles from the limit positions. Done here in setup()
+   *  so that it doesn't have to be don every time the servo positions are 
+   *  calculated.
+   */
   for (int i = 0; i < 2; i++) {
     armBaseAngleLimit[i] = map(armBasePosLimit[i], 0, 1023, -16500, 16500);
     armMidAngleLimit[i]  = map(armMidPosLimit[i],  0, 1023, -16500, 16500);
@@ -237,35 +270,27 @@ void setup() {
 }
 
 void loop() {
+  
   battCheck();
+  
   getCtlInputs();
   
   // Monitor for shutdown signal
-  if (dPadUp) {
-    digitalWrite(shutdownPin, HIGH);
-    armBase.torqueOff();
-    armMid.torqueOff();
-    wrist.torqueOff();
-    gripper.torqueOff();
-    Serial.print(F("Emergency shutdown signal recieved."));
-    while(1); //halt
-  }
+  if (dPadUp) killPower();
   
   inputCtlMod();
   
   // Toggle auto mode
-  if (start) {
-    autoModeSwitch();
-  }
+  if (start) autoModeSwitch();
 
   // Enable control of arm only if not in auto mode
   if (!autoMode) armCtl();
 
+  // If in auto mode, do automatic stuff
+  if(autoMode) autoModeCtl();
 
-  if(autoMode) {
-    autoModeCtl();
-  }
-
+  // Communicate with ROS
+  // TODO: this
 //  ROScomm();
   
   driveCtl();
@@ -288,22 +313,31 @@ void driveCtl() {
 //Convert lt analog stick X and Y coordinates to polar coordinates
   float steeringTheta;
   float driveR;
-  if (!autoMode) { 
+  
+  if (!autoMode) { //only consider stick input when not in auto mode
     steeringTheta = atan2(ltAnalogX, ltAnalogY); //determine angle of velocity vector
-    steeringTheta = steeringTheta + steeringTrim; //apply steering trim
     driveR = sqrt(square(ltAnalogX)+square(ltAnalogY)); //determine the magnitude of the velocity vector
     driveR = constrain(driveR, 0.0, 128.0);
-  }else if (!targetDetected) {
+  }else if (!targetDetected) { //only consider auto inputs if the target hasn't been detected
     steeringTheta = steeringThetaAuto;
     driveR = driveRAuto;
-  }else {
+  }else { //if in auto mode, and a target has been detected, stop.
     steeringTheta = 0;
     driveR = 0;
   }
-  
+
+  // Apply steering trim
+  steeringTheta = steeringTheta + steeringTrim;
+
+  /* Scale up the velocity magnitude in order to more precisely apply
+   *  acceleration limits while avoiding floating point math. Since the 
+   *  magnitude has previously been constrained to 128, 511 is the largest 
+   *  number we can scale it by and still fit the resulting value
+   *  into an int datatype.
+   */  
   unsigned int driveRscaled = driveR * 511; //scale up for application of acceleration limits. effectively constrained to 65,408
       
-  //Serial << "Steering Angle: \t" << (steeringTheta * 57.2957) << "\tVelocity Magnituded: \t" << driveR << "\n\n";
+//  Serial << "Steering Angle: \t" << (steeringTheta * 57.2957) << "\tVelocity Magnituded: \t" << driveR << "\n\n";
   
   steeringTheta = steeringTheta - (PI / 4);  // rotate vector 45 degrees (pi/4)
   
@@ -346,33 +380,39 @@ void driveCtl() {
       }
     }
   }
+  //remember these values for the next loop.
   lastLWS = LWS;
   lastRWS = RWS;
-  
-  // Map speeds back to values easier to visualize
-  LWS = map(LWS, -65408, 65408, -128, 128);
-  RWS = map(RWS, -65408, 65408, -128, 128);
 
+  
   static boolean speedMode = false;
-  if(tri == true) speedMode = !speedMode;
+  // Change mode only if the robot is stopped
+  if(tri == true && LWS == 0 && RWS ==0) {
+    speedMode = !speedMode;
+    if(speedmode) {
+      tone(buzzer, 1500, 50);
+    } else {
+      tone(buzzer, 1000, 50);
+    }
+  }
 
   if(speedMode) {
     // SpeedMode maximizes forward velocity at the expense of control resolution and turning radius at speed
-    LWS = constrain(LWS, -90, 90);
-    RWS = constrain(RWS, -90, 90);
+    LWS = constrain(LWS, -46250, 46250);
+    RWS = constrain(RWS, -46250, 46250);
 
 //    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
 
-    LWS = map(LWS, -90, 90, -150000, 150000);
-    RWS = map(RWS, -90, 90, -150000, 150000);
+    LWS = map(LWS, -46250, 46250, -150000, 150000);
+    RWS = map(RWS, -46250, 46250, -150000, 150000);
     
 //    Serial << "Wheel after mapping: \tLT: " << LWS << "\tRT: " << RWS << '\n';
     
   }else {
 //    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
 
-    LWS = map(LWS, -128, 128, -60000, 60000);
-    RWS = map(RWS, -128, 128, -60000, 60000);
+    LWS = map(LWS, -65408, 65408, -50000, 50000);
+    RWS = map(RWS, -65408, 65408, -50000, 50000);
 
 //    Serial <<"Wheel after mapping:\t LT: " << LWS << "\tRT: " << RWS << '\n';
   }
@@ -391,10 +431,12 @@ void autoModeCtl() {
 static unsigned long buzzerMillis = 0;
   if (targetDetected && millis() - buzzerMillis > 500) {
     buzzerMillis = millis();
-    tone(buzzer, 500, 250);
+    tone(buzzer, 2600, 250);
   }
+  //placeholder for ROS inputs
   steeringThetaAuto = PI;
   driveRAuto = 63;
+  
 }
 
 void autoModeSwitch() {
@@ -408,7 +450,7 @@ void autoModeSwitch() {
     Serial.println("Automode!");
     //TODO tell ROS we're in automode
 
-  }else if (start && autoMode){ //exit automode
+  }else if (start && autoMode || !controllerConnected()){ //exit automode
     autoMode = false;
     targetDetected = false;
     digitalWrite(autoModeLED, LOW);
@@ -495,7 +537,8 @@ void getCtlInputs() {
     psBtn = PS3.getButtonClick(PS);
 
   }else{
-    ltAnalogX = 127;  //reset buttons and axes if the controller drops out
+    //reset buttons and axes if the controller drops out, so the robot doesn't drive off uncontrollably
+    ltAnalogX = 127;  
     ltAnalogY = 127;
     rtAnalogX = 127;
     rtAnalogY = 127;
@@ -516,6 +559,8 @@ void getCtlInputs() {
     start = false;
     select = false;
     psBtn = false;
+
+    autoModeSwitch();
   }
 }
 
@@ -615,7 +660,6 @@ void ROScomm() {
   // Get motor/encoder positions
   for (int i = 0; i < 2; i++) {
     odrive_serial << "w axis" << i << ".encoder.count_in_cpr\n";
-    delay(10);
     motorPos[i] = odrive.readInt();
   }
   // Pass to ROS
@@ -842,6 +886,20 @@ void resetOdrive() {
   
   Serial.println ("Could not set closed loop control");
 
+}
+
+void killPower() {
+  /* When called, this function will turn off the servos, send a shutdown
+   *  signal to the kill relay, and halt the loop.
+   */
+  //TODO: send shutdown signal to IR array?
+  digitalWrite(shutdownPin, HIGH);
+  armBase.torqueOff();
+  armMid.torqueOff();
+  wrist.torqueOff();
+  gripper.torqueOff();
+  Serial.print(F("Emergency shutdown signal recieved."));
+  while(1); //halt
 }
 
 /*~~~~~~~~~~~~~~~~ INTERRUPT SERVICE ROUTINES (ISR) ~~~~~~~~~~~~~~~~~*/
