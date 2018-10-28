@@ -389,7 +389,7 @@ void driveCtl() {
   // Change mode only if the robot is stopped
   if(tri == true && LWS == 0 && RWS ==0) {
     speedMode = !speedMode;
-    if(speedmode) {
+    if(speedMode) {
       tone(buzzer, 1500, 50);
     } else {
       tone(buzzer, 1000, 50);
