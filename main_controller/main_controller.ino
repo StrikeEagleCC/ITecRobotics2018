@@ -61,7 +61,7 @@ const byte BTconnectLED    = 13;
 const byte autoModeLED     = 46;
 const byte buzzer          = 48;
 
-const byte odriveReset     = 39;
+const byte odriveReset     = 34;
 const byte shutdownPin     = 44;
 
 //interrupts
@@ -224,7 +224,7 @@ void setup() {
   Serial.begin(115200);
   odrive_serial.begin(115200);
   servo_serial.begin(115200);
-  //ROS_serial.begin(115200); 
+  ROS_serial.begin(115200); 
 
   /* Turn off servo motors
    *  This is done so that if the arduino is reset without resetting
@@ -288,10 +288,6 @@ void loop() {
 
   // If in auto mode, do automatic stuff
   if(autoMode) autoModeCtl();
-
-  // Communicate with ROS
-  // TODO: this
-//  ROScomm();
   
   driveCtl();
 
@@ -318,6 +314,9 @@ void driveCtl() {
     steeringTheta = atan2(ltAnalogX, ltAnalogY); //determine angle of velocity vector
     driveR = sqrt(square(ltAnalogX)+square(ltAnalogY)); //determine the magnitude of the velocity vector
     driveR = constrain(driveR, 0.0, 128.0);
+
+//    Serial << "X: " << ltAnalogX << "\tY: " << ltAnalogY << "\tTheta: " << steeringTheta << '\n';
+    
   }else if (!targetDetected) { //only consider auto inputs if the target hasn't been detected
     steeringTheta = steeringThetaAuto;
     driveR = driveRAuto;
@@ -335,7 +334,7 @@ void driveCtl() {
    *  number we can scale it by and still fit the resulting value
    *  into an int datatype.
    */  
-  unsigned int driveRscaled = driveR * 511; //scale up for application of acceleration limits. effectively constrained to 65,408
+  unsigned int driveRscaled = driveR * 511.0; //scale up for application of acceleration limits. effectively constrained to 65,408
       
 //  Serial << "Steering Angle: \t" << (steeringTheta * 57.2957) << "\tVelocity Magnituded: \t" << driveR << "\n\n";
   
@@ -384,35 +383,38 @@ void driveCtl() {
   lastLWS = LWS;
   lastRWS = RWS;
 
+  // Map speeds back to values easier to visualize  
+  LWS = map(LWS, -65408, 65408, -128, 128); 
+  RWS = map(RWS, -65408, 65408, -128, 128);
   
   static boolean speedMode = false;
   // Change mode only if the robot is stopped
   if(tri == true && LWS == 0 && RWS ==0) {
     speedMode = !speedMode;
     if(speedMode) {
-      tone(buzzer, 1500, 50);
+      tone(buzzer, 1500, 250);
     } else {
-      tone(buzzer, 1000, 50);
+      tone(buzzer, 1000, 250);
     }
   }
 
   if(speedMode) {
     // SpeedMode maximizes forward velocity at the expense of control resolution and turning radius at speed
-    LWS = constrain(LWS, -46250, 46250);
-    RWS = constrain(RWS, -46250, 46250);
+    LWS = constrain(LWS, -90, 90);
+    RWS = constrain(RWS, -90, 90);
 
-//    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
+    //Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
 
-    LWS = map(LWS, -46250, 46250, -150000, 150000);
-    RWS = map(RWS, -46250, 46250, -150000, 150000);
+    LWS = map(LWS, -90, 90, -150000, 150000);
+    RWS = map(RWS, -90, 90, -150000, 150000);
     
-//    Serial << "Wheel after mapping: \tLT: " << LWS << "\tRT: " << RWS << '\n';
+    //Serial << "Wheel after mapping: \tLT: " << LWS << "\tRT: " << RWS << '\n';
     
   }else {
-//    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
+    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
 
-    LWS = map(LWS, -65408, 65408, -50000, 50000);
-    RWS = map(RWS, -65408, 65408, -50000, 50000);
+    LWS = map(LWS, -128, 128, -50000, 50000);
+    RWS = map(RWS, -128, 128, -50000, 50000);
 
 //    Serial <<"Wheel after mapping:\t LT: " << LWS << "\tRT: " << RWS << '\n';
   }
@@ -433,9 +435,9 @@ static unsigned long buzzerMillis = 0;
     buzzerMillis = millis();
     tone(buzzer, 2600, 250);
   }
-  //placeholder for ROS inputs
-  steeringThetaAuto = PI;
-  driveRAuto = 63;
+
+  //get directions from ROS and convert to int
+  ROScomm();
   
 }
 
@@ -448,9 +450,12 @@ void autoModeSwitch() {
     interrupts();
     digitalWrite(autoModeLED, HIGH);
     Serial.println("Automode!");
+    ROS_serial.flush();
+//    steeringThetaAuto = 0;
+//    driveRAuto = 0;
     //TODO tell ROS we're in automode
 
-  }else if (start && autoMode || !controllerConnected()){ //exit automode
+  }else if ((start && autoMode) || !controllerConnected()){ //exit automode
     autoMode = false;
     targetDetected = false;
     digitalWrite(autoModeLED, LOW);
@@ -657,14 +662,43 @@ static unsigned long activateMillis = 0;
 }
 
 void ROScomm() {
-  // Get motor/encoder positions
-  for (int i = 0; i < 2; i++) {
-    odrive_serial << "w axis" << i << ".encoder.count_in_cpr\n";
-    motorPos[i] = odrive.readInt();
+  String str1 = "";
+  String str2 = "";
+  for (;;) {
+    if (!ROS_serial.available()) {
+      return;
+    }
+    char c = ROS_serial.read();
+    if (c == ',') break;
+    
+    str1 += c;
   }
-  // Pass to ROS
+  for (;;) {
+    char c = ROS_serial.read();
+    if (c == '\n') break;
+
+    str2 += c;
+  }
   
-  // Get steering angle and velocity
+  Serial << "Strings:" << str1 << '\t' << str2 << '\n';
+  
+  //convert second string to float angle in radians
+  int angle = str2.toInt();
+  Serial << "Angle in Degrees: \t" << angle << '\n';
+  /* 0 is straight, neg is left, pos is right. For steeringThetaAuto,
+   *  pi is straight, and units are radians. So add 180 to correct the direction
+   *  and divide by 180 to convert to radian.
+   */
+
+   //correct offset
+   angle = (angle - 180) * -1;
+   steeringThetaAuto = angle * PI / 180.0;
+
+   Serial << "Angle In Radians: \t" << steeringThetaAuto << "\n\n";
+
+   //convert first string to velocity magnitude
+   driveRAuto = str1.toFloat();
+  return;  
 }
 
 void battCheck(){
