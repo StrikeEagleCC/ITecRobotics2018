@@ -29,8 +29,8 @@
 #define rtDetectSignal  9     //right signal pin
 
 
-#define MIN_VALUE       100        //sets minimum threshold for brightness (from calibrated values, out of 1000)
-#define MAX_VALUE       900        //sets max threshold for blackness (from calibrated values, out of 1000)
+#define MIN_VALUE       150        //sets minimum threshold for brightness (from calibrated values, out of 1000)
+#define MAX_VALUE       700        //sets max threshold for blackness (from calibrated values, out of 1000)
 
 //create sensor array objects
 QTRSensorsRC ltSensor((unsigned char[]) {2, 3, 4, 5, 6}, NUM_SENSORS, TIMEOUT);
@@ -78,13 +78,12 @@ void setup() {
 
   for (int i = 0; i < NUM_SENSORS; i++) {
     // Set Calibration Values
-    unsigned int centerVal = TIMEOUT / 2;
-    ltCalMin[i] = centerVal;
-    ltCalMax[i] = centerVal;
-    rtCalMin[i] = centerVal;
-    rtCalMax[i] = centerVal;
+    ltCalMin[i] = TIMEOUT; //they can only go down from here
+    rtCalMin[i] = TIMEOUT;
+    ltCalMax[i] = 0;       //they can only go up from here
+    rtCalMax[i] = 0;
 
-    // set history array values
+    // set history array values to center
     for (int j = 0; j < NUM_SAMPLES; j++) {
       ltValuesHist[j][i] = 500;
       rtValuesHist[j][i] = 500;
@@ -106,7 +105,7 @@ void loop() {
 
   for (int i = 0; i < NUM_SENSORS; i++) {
     
-    // Update calibration values for the first minute of operation
+    // Update calibration values for the first seconds of operation. Configure CAL_TIME above
     static boolean calibrated = false;
     if (!calibrated) {
       if (millis() < CAL_TIME * 1000) {
@@ -123,26 +122,28 @@ void loop() {
       }else calibrated = true;
     }
 
-    // Keep values within calibrated range (important for post calibration operation)
-    ltValues[i] = constrain(ltValues[i], ltCalMin[i], ltCalMax[i]);
-    rtValues[i] = constrain(rtValues[i], rtCalMin[i], rtCalMax[i]);
-    
-    // Map sensor values to calibrated range
-    ltValues[i] = map(ltValues[i], ltCalMin[i], ltCalMax[i], 0, 1000);
-    rtValues[i] = map(rtValues[i], rtCalMin[i], rtCalMax[i], 0, 1000);
-    
-    
-    //update sums
-    ltValuesSum[i] = ltValuesSum[i] - ltValuesHist[sampleCount][i] + ltValues[i];
-    rtValuesSum[i] = rtValuesSum[i] - rtValuesHist[sampleCount][i] + rtValues[i];
-    
-    //update history
-    ltValuesHist[sampleCount][i] = ltValues[i];
-    rtValuesHist[sampleCount][i] = rtValues[i];
-    
-    //calculate average
-    ltValuesAvg[i] = ltValuesSum[i] / NUM_SAMPLES;
-    rtValuesAvg[i] = rtValuesSum[i] / NUM_SAMPLES;
+    if (calibrated = true); {
+      // Keep values within calibrated range (important for post calibration operation)
+      ltValues[i] = constrain(ltValues[i], ltCalMin[i], ltCalMax[i]);
+      rtValues[i] = constrain(rtValues[i], rtCalMin[i], rtCalMax[i]);
+      
+      // Map sensor values to calibrated range
+      ltValues[i] = map(ltValues[i], ltCalMin[i], ltCalMax[i], 0, 1000);
+      rtValues[i] = map(rtValues[i], rtCalMin[i], rtCalMax[i], 0, 1000);
+      
+      
+      //update sums
+      ltValuesSum[i] = ltValuesSum[i] - ltValuesHist[sampleCount][i] + ltValues[i];
+      rtValuesSum[i] = rtValuesSum[i] - rtValuesHist[sampleCount][i] + rtValues[i];
+      
+      //update history
+      ltValuesHist[sampleCount][i] = ltValues[i];
+      rtValuesHist[sampleCount][i] = rtValues[i];
+      
+      //calculate average
+      ltValuesAvg[i] = ltValuesSum[i] / NUM_SAMPLES;
+      rtValuesAvg[i] = rtValuesSum[i] / NUM_SAMPLES;
+    }
   }
   
   boolean ltbelowMin = false;
@@ -184,7 +185,7 @@ void loop() {
     sampleCount ++;
   } else sampleCount = 0;
 
-//    //debugging
+//  //debugging
 //  Serial.print("Sample Count: ");
 //  Serial.println(sampleCount);
 //  Serial.println("Sensor Values");
@@ -220,7 +221,7 @@ void loop() {
 //    Serial.print('\t');
 //  }
 //  Serial.println();
-  
+//
 //  Serial.println("Sensor Averages");
 //  for (int i = 0; i < NUM_SENSORS; i++) {
 //    Serial.print(ltValuesAvg[i]);
@@ -230,6 +231,6 @@ void loop() {
 //    Serial.print(rtValuesAvg[i]);
 //    Serial.print('\t');
 //  }
-//  Serial.println('\n');
+  Serial.println('\n');
 //  delay(100);
 }
