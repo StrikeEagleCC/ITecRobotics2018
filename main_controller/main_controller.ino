@@ -49,8 +49,8 @@ XYZrobotServo gripper(servo_serial, 1);
 
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~ ROS SETUP ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
-#define ROS_serial Serial1
-
+#define ROS_serial   Serial1
+#define NUM_POINTS   3       // How many lidar points to use
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ PINOUT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 /* When using the USB Host Shiled (or any shield that uses the ICSP header),
  *  pins 50-53 should not be used, since they are connected to ICSP.
@@ -76,7 +76,7 @@ const byte rtTargetDetect  = 21;
  * monitor while moving the sticks around.
  */
 int ltAnalogXDeadZone[2] = {115, 147};
-int ltAnalogYDeadZone[2] = {103, 142};
+int ltAnalogYDeadZone[2] = {101, 142};
 int rtAnalogXDeadZone[2] = {115, 147};
 int rtAnalogYDeadZone[2] = {115, 150};
 int analogL2DeadZone = 0; //the L2 sticks only need a single value, since they rest at one extreme of their physical travel.
@@ -188,6 +188,9 @@ unsigned long currentMillis  = 0;
 volatile byte targetSide = 0;  // 0 = no target, 1 = left side, 2 = right side
 boolean targetDetected = false;
 
+unsigned int lidarPoints[NUM_POINTS];
+
+
 void setup() {
   /* The following three lines are necessary to get XYZrobot A1-16 servos 
    *  to power up and communicate correctly. Pulling the Tx pin high was 
@@ -290,10 +293,6 @@ void loop() {
   if(autoMode) autoModeCtl();
   
   driveCtl();
-
-//  static unsigned long loopcounter = 0;
-//  if (loopcounter % 1000 == 0) Serial.println(loopcounter);
-//  loopcounter++;
 }
 
 void driveCtl() {
@@ -311,14 +310,14 @@ void driveCtl() {
   float driveR;
   
   if (!autoMode) { //only consider stick input when not in auto mode
-    steeringTheta = atan2(ltAnalogX, ltAnalogY); //determine angle of velocity vector
+    steeringTheta = atan2(ltAnalogY, ltAnalogX); //determine angle of velocity vector
     driveR = sqrt(square(ltAnalogX)+square(ltAnalogY)); //determine the magnitude of the velocity vector
     driveR = constrain(driveR, 0.0, 128.0);
 
 //    Serial << "X: " << ltAnalogX << "\tY: " << ltAnalogY << "\tTheta: " << steeringTheta << '\n';
     
   }else if (!targetDetected) { //only consider auto inputs if the target hasn't been detected
-    steeringTheta = steeringThetaAuto;
+    steeringTheta = steeringThetaAuto * PI / 180 + (PI/2);
     driveR = driveRAuto;
   }else { //if in auto mode, and a target has been detected, stop.
     steeringTheta = 0;
@@ -346,8 +345,8 @@ void driveCtl() {
   static long lastRWS = 0;
   
 //convert to cartesian and store as wheel speed
-  LWS = driveRscaled * sin(steeringTheta);
-  RWS = driveRscaled * cos(steeringTheta);
+  LWS = driveRscaled * cos(steeringTheta);
+  RWS = driveRscaled * sin(steeringTheta);
   
   //apply acceleration limits
   static unsigned long accMillis = millis();
@@ -384,8 +383,8 @@ void driveCtl() {
   lastRWS = RWS;
 
   // Map speeds back to values easier to visualize  
-  LWS = map(LWS, -65408, 65408, -128, 128); 
-  RWS = map(RWS, -65408, 65408, -128, 128);
+  LWS = map(LWS, -65408, 65408, -128, 128);
+  RWS = map(RWS, -65408, 65408, 128, -128); //also reverse right motor direction
   
   static boolean speedMode = false;
   // Change mode only if the robot is stopped
@@ -411,7 +410,7 @@ void driveCtl() {
     //Serial << "Wheel after mapping: \tLT: " << LWS << "\tRT: " << RWS << '\n';
     
   }else {
-    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
+//    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
 
     LWS = map(LWS, -128, 128, -50000, 50000);
     RWS = map(RWS, -128, 128, -50000, 50000);
@@ -426,19 +425,26 @@ void driveCtl() {
 
 void autoModeCtl() {
   if (targetSide != 0 && !targetDetected) {
-    Serial.println("TargetFound!");
+//    Serial.println(F("TargetFound!"));
     //TODO: tell ROS we found the target
     targetDetected = true;
   }
 static unsigned long buzzerMillis = 0;
-  if (targetDetected && millis() - buzzerMillis > 500) {
-    buzzerMillis = millis();
-    tone(buzzer, 2600, 250);
+  if (targetDetected) {
+    if (millis() - buzzerMillis > 500){
+      buzzerMillis = millis();
+      tone(buzzer, 2600, 250);
+    }
+    return;
   }
 
   //get directions from ROS and convert to int
-  ROScomm();
-  
+  getLidar();
+
+  if (lidarPoints[1] > 300) {
+    steeringThetaAuto = 0;
+    driveRAuto = 63;
+  } else driveRAuto = 0;
 }
 
 void autoModeSwitch() {
@@ -449,7 +455,7 @@ void autoModeSwitch() {
     targetSide = 0;
     interrupts();
     digitalWrite(autoModeLED, HIGH);
-    Serial.println("Automode!");
+//    Serial.println("Automode!");
     ROS_serial.flush();
 //    steeringThetaAuto = 0;
 //    driveRAuto = 0;
@@ -459,7 +465,7 @@ void autoModeSwitch() {
     autoMode = false;
     targetDetected = false;
     digitalWrite(autoModeLED, LOW);
-    Serial.println("No Automode!");
+//    Serial.println("No Automode!");
     //TODO: tellROS we're no longer in autoMode
   }
 }
@@ -599,10 +605,10 @@ void inputCtlMod () {
     rtAnalogX = map(rtAnalogX, rtAnalogXDeadZone[1], 255, 128, 255);
   }else rtAnalogX = 127;
   
-  ltAnalogX = ltAnalogX - 127; //center on zero
-  ltAnalogY = ltAnalogY - 127;
+  ltAnalogX = ltAnalogX - 127; 
+  ltAnalogY = map(ltAnalogY, 0, 255, 255, 0) - 128;  //flip input direction and center on zero
   rtAnalogX = rtAnalogX - 127;
-  rtAnalogY = map(rtAnalogY, 0, 255, 255, 0) - 127;  //flip input direction and center on zero
+  rtAnalogY = map(rtAnalogY, 0, 255, 255, 0) - 128;  //flip input direction and center on zero
 
 
 //  Serial << "Axis values after deadzone: X: " << ltAnalogX << "\tY: " << ltAnalogY << '\n';
@@ -661,44 +667,84 @@ static unsigned long activateMillis = 0;
   }
 }
 
-void ROScomm() {
-  String str1 = "";
-  String str2 = "";
-  for (;;) {
-    if (!ROS_serial.available()) {
-      return;
+boolean getLidar() {
+  
+  //send request for data points
+  ROS_serial.print(F("send\n"));
+//  Serial.println(F("LiDAR data requested..."));
+
+  boolean recieved = false;  // to keep track of transmission success
+  
+  String str[NUM_POINTS];    // to store the strings from the message
+
+  //initialize the string array
+  for (int i = 0; i < NUM_POINTS; i++) {
+    str[i] = "";
+  }
+
+  unsigned long ROStimer = millis();
+  while(!ROS_serial.available() && (millis() - ROStimer < 100)) { //wait up to 100ms for response
+    delay(50); //wait
+//    Serial.println(F("Waiting for response from ROS..."));
+  }
+  
+  if (!ROS_serial.available()) {
+//    Serial.println(F("\nRequest for lidar points timed out"));
+    return false;
+  }
+
+  //read data in the serial buffer.
+  for (int i = 0; i < NUM_POINTS; i++) {
+    while (ROS_serial.available()){
+      char c = ROS_serial.read();
+
+      //at each comma, increment the array index
+      if (c == ',') break;
+
+      //at '\n', check to be sure we filled each array element
+      if (c == '\n') {
+        if (i == NUM_POINTS -1) {  //if we're on the last element, we're good
+          recieved = true;
+          break;
+        } else {  // if we reached '\n' while on an array element other than the last, break out of the for and while loops
+          i = NUM_POINTS; //to exit for loop after breaking the while loop
+//          Serial.println(F("Unexpected end of LiDAR data string"));
+          break;
+        }
+      } else {
+        
+      }
+      str[i] += c;
     }
+  }
+  
+  // Empty any remaining data in the recieve buffer
+  while(ROS_serial.available()) {
     char c = ROS_serial.read();
-    if (c == ',') break;
+  }
+
+  if (recieved) {
+    // Convert strings to ints and store in global array
+    for (int i = 0; i < NUM_POINTS; i++) {    
+      lidarPoints[i] = (int) str[i].toInt();  //TODO: which one to use? (int) or .toInt()?
+    }
+
+//    //debugging
+//    for (int i = 0; i < NUM_POINTS; i++) {
+//      Serial.print(lidarPoints[i]);
+//      Serial.print('\t');
+//    }
+//    Serial.println();
     
-    str1 += c;
+    return true;
+    
+  }else {
+    //if recieve failed,return false
+
+//    Serial.println(F("Failed to get LiDAR data. Possible lack of terminating character."));
+
+    return false;
   }
-  for (;;) {
-    char c = ROS_serial.read();
-    if (c == '\n') break;
-
-    str2 += c;
-  }
-  
-  Serial << "Strings:" << str1 << '\t' << str2 << '\n';
-  
-  //convert second string to float angle in radians
-  int angle = str2.toInt();
-  Serial << "Angle in Degrees: \t" << angle << '\n';
-  /* 0 is straight, neg is left, pos is right. For steeringThetaAuto,
-   *  pi is straight, and units are radians. So add 180 to correct the direction
-   *  and divide by 180 to convert to radian.
-   */
-
-   //correct offset
-   angle = (angle - 180) * -1;
-   steeringThetaAuto = angle * PI / 180.0;
-
-   Serial << "Angle In Radians: \t" << steeringThetaAuto << "\n\n";
-
-   //convert first string to velocity magnitude
-   driveRAuto = str1.toFloat();
-  return;  
 }
 
 void battCheck(){
@@ -768,17 +814,17 @@ void battCheck(){
     }else sampleCount = 0;
 
 //    //debugging
-//    Serial.print("Sample value: ");
+//    Serial.print(F("Sample value: "));
 //    Serial.println(sampleCurrent);
-//    Serial.print("Sample history: ");
+//    Serial.print(F("Sample history: "));
 //    for (int i = 0; i < battNumSamples; i++) {
 //      Serial.print(sampleArray[i]);
 //      Serial.print('\t');
 //    }
 //    Serial.println();
-//    Serial.print("\t Sample sum: ");
+//    Serial.print(F("\t Sample sum: "));
 //    Serial.print(sampleSum);
-//    Serial.print("\t\tSample average: ");
+//    Serial.print(F("\t\tSample average: "));
 //    Serial.println(sampleAvg);
 //    Serial.println();
   }
@@ -786,7 +832,7 @@ void battCheck(){
   //take action based on condition code
   switch (battCode) {
     case 3:
-//      Serial.println("Battery critically low. Shutting down . . .");
+      Serial.println(F("Battery critically low. Shutting down . . ."));
       digitalWrite(shutdownPin, HIGH);
       digitalWrite(battLED0, HIGH);
       armBase.torqueOff();
@@ -801,6 +847,7 @@ void battCheck(){
         battLEDState = !battLEDState;
         digitalWrite(battLED0, battLEDState);
         flashPrevMillis = millis();
+        tone(buzzer, 2160, 100);
       }
       break;
     case 1:
@@ -809,6 +856,7 @@ void battCheck(){
         battLEDState = !battLEDState;
         digitalWrite(battLED0, battLEDState);
         flashPrevMillis = millis();
+        tone(buzzer, 1080, 100);
       }
       break;
     case 0:
@@ -869,12 +917,12 @@ void resetOdrive() {
   while(odrive.readFloat() == 0.00 && retryCount != 11) {
     retryCount++;
     if (retryCount == 11) {
-      Serial.println("\nNo Response from odrive. Canceling reset.");
+      Serial.println(F("\nNo Response from odrive. Canceling reset."));
       return;
     }
     delay(1000);
     odrive_serial << "r vbus_voltage\n";
-    Serial.print("Retry #");
+    Serial.print(F("Retry #"));
     Serial.println(retryCount);
   }
 
@@ -882,27 +930,34 @@ void resetOdrive() {
   // battCheck();
 
   //run calibrations
-  Serial.println("Calibrating motors . . .");
+  Serial.println(F("Calibrating motors . . ."));
   int requested_state = ODriveArduino::AXIS_STATE_MOTOR_CALIBRATION;
   odrive.run_state(0, requested_state, false);
   odrive.run_state(1, requested_state, true);
 
-  Serial.println("Calibrating Encoders . . .");
+  Serial.println(F("Calibrating Encoders . . ."));
   requested_state = ODriveArduino::AXIS_STATE_ENCODER_OFFSET_CALIBRATION;
   odrive.run_state(0, requested_state, false);
   odrive.run_state(1, requested_state, true);
 
-  Serial.println("Setting velocity control mode . . .");
+  Serial.println(F("Setting velocity control mode . . ."));
   odrive_serial << "w axis0.controller.config.control_mode 2\n";
   odrive_serial << "w axis1.controller.config.control_mode 2\n";
   delay(10);
 
-  Serial.println("Setting closed loop control . . .");
+  Serial.println(F("Setting closed loop control . . ."));
   requested_state = ODriveArduino::AXIS_STATE_CLOSED_LOOP_CONTROL;
   odrive.run_state(0, requested_state, false);
   odrive.run_state(1, requested_state, false);
   
   //check both motors are in closed loop control mode
+  
+  //TODO: figure out why this always times out (see fix notes)
+  /* checked state values with incorrect element indexes (1 and 2 instead
+   *  of 0 and 1. Corrected now, needs to be verified.
+   */
+
+  
   int timeout_ctr = 100;
   boolean stateCheck[2] = {false, false};
   do {
@@ -912,13 +967,13 @@ void resetOdrive() {
       delay(10);
       if(odrive.readInt() == requested_state) stateCheck[i] = true; 
     }
-    if (stateCheck[1] && stateCheck[2]) {
-      Serial.println("Motors are good to go!");
+    if (stateCheck[0] && stateCheck[1]) {
+      Serial.println(F("Motors are good to go!"));
       return;
     }
   } while (timeout_ctr-- > 0);
   
-  Serial.println ("Could not set closed loop control");
+  Serial.println (F("Could not set closed loop control"));
 
 }
 
