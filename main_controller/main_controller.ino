@@ -189,6 +189,7 @@ volatile byte targetSide = 0;  // 0 = no target, 1 = left side, 2 = right side
 boolean targetDetected = false;
 
 unsigned int lidarPoints[NUM_POINTS];
+unsigned int lastPoints[NUM_POINTS];
 
 
 void setup() {
@@ -424,6 +425,8 @@ void driveCtl() {
 }
 
 void autoModeCtl() {
+
+  
   if (targetSide != 0 && !targetDetected) {
 //    Serial.println(F("TargetFound!"));
     //TODO: tell ROS we found the target
@@ -448,7 +451,7 @@ static unsigned long buzzerMillis = 0;
 }
 
 void autoModeSwitch() {
-  if (armHome && !autoMode) { //initialize automode
+  if (armHome && !autoMode) { //initialize automode if the arm is home, and we're not already in automode
     autoMode = true;
     targetDetected = false;
     noInterrupts();        //disable interrupts while modifying a volitile variable
@@ -456,11 +459,17 @@ void autoModeSwitch() {
     interrupts();
     digitalWrite(autoModeLED, HIGH);
 //    Serial.println("Automode!");
-    ROS_serial.flush();
-//    steeringThetaAuto = 0;
-//    driveRAuto = 0;
-    //TODO tell ROS we're in automode
+    
+    //clear the input buffer before requesting data first
+    while (ROS_serial.available()) {
+      char c = ROS_serial.read();
+    }
 
+    //clear the lastPoints array
+    for (int i = 0; i < NUM_POINTS; i++) {
+      lastPoints[i] = 0;
+    }
+    
   }else if ((start && autoMode) || !controllerConnected()){ //exit automode
     autoMode = false;
     targetDetected = false;
@@ -667,38 +676,56 @@ static unsigned long activateMillis = 0;
   }
 }
 
-boolean getLidar() {
+int getLidar() {
+  /* This function sends a request for lidar points to ROS,
+   *  and sets a timer to wait for a response. The function will return:
+   *  0 - data requested, waiting for response
+   *  1 - good data recieved
+   *  2 - request timed out, or bad data
+   *  3 - request timed out, or bad data second time in a row
+   */
+   
+  static int receiptErrorNum = 1;  //keep track of how many errors we get. Start at 1 
+                                   //so the smallest value that could get returned is 2 after being incremented
+  static unsigned long requestTime; //for the timer
+  static boolean requested = false; //to know whether to keep asking for data
+  boolean recieved = false;         // to keep track of transmission success
   
   //send request for data points
-  ROS_serial.print(F("send\n"));
-//  Serial.println(F("LiDAR data requested..."));
-
-  boolean recieved = false;  // to keep track of transmission success
-  
-  String str[NUM_POINTS];    // to store the strings from the message
-
-  //initialize the string array
-  for (int i = 0; i < NUM_POINTS; i++) {
-    str[i] = "";
+  if (!requested) {
+    ROS_serial.print(F("send\n"));
+    requested = true;
+    requestTime = millis();
+  //  Serial.println(F("LiDAR data requested..."));
   }
 
-  unsigned long ROStimer = millis();
-  while(!ROS_serial.available() && (millis() - ROStimer < 100)) { //wait up to 100ms for response
-    delay(50); //wait
-//    Serial.println(F("Waiting for response from ROS..."));
+  if (!ROS_serial.available() && (millis() - requestTime < 100)) {
+    return 0; //return 0 to note that we're waiting for a response
   }
   
   if (!ROS_serial.available()) {
 //    Serial.println(F("\nRequest for lidar points timed out"));
-    return false;
+
+    //request timed out, so increment the error number
+    receiptErrorNum = receiptErrorNum++;
+
+    //return the appropriate code for the number of errors
+    return receiptErrorNum ;
   }
 
-  //read data in the serial buffer.
+  /* At this point, we know we have data. We will collect it now, and next time the loop
+   *  runs, we want to start a new request, so we'll set requested = false.
+   */
+  requested = false;
+    
+  String str[NUM_POINTS];    // to store the strings from ROS, to be converted to points
+
+  //read data in the serial buffer into the string array
   for (int i = 0; i < NUM_POINTS; i++) {
     while (ROS_serial.available()){
       char c = ROS_serial.read();
 
-      //at each comma, increment the array index
+      //at each comma, break the while loop and increment the for loop
       if (c == ',') break;
 
       //at '\n', check to be sure we filled each array element
@@ -711,9 +738,15 @@ boolean getLidar() {
 //          Serial.println(F("Unexpected end of LiDAR data string"));
           break;
         }
-      } else {
-        
       }
+
+      //check each char to to see if it's a digit
+      if (!isDigit(c)) {
+        Serial.print(F("Non-numeric character recieved"));
+        i = NUM_POINTS;   //exit for loop after breaking
+        break;
+      }
+      // if the character isn't a comma, a '\n', and is a digit, append it to the array element
       str[i] += c;
     }
   }
@@ -724,9 +757,30 @@ boolean getLidar() {
   }
 
   if (recieved) {
+    /*this statement will only be true if we encountered a '\n' 
+     * after filling the last element in the str[] array. */
+
+    /*check to see if lastPoints[] is empty (this will happen when we first start automode).
+     * If the array is empty, we need to populated it with the same values we just recieved.
+     */
+    static boolean firstPoints= true;
+     if (firstPoints) {
+      firstPoints = false; //it won't ever run again
+      
+      /* Convert strings to ints and store in global array. same as below, but populating 
+       * the array with values to store in lastpoints[] for the first time the code is run.
+       * Since the lidarPoints[] array is also empty the first time this code is run, 
+       * we need to populate it early on the first request only.
+        */
+      for (int i = 0; i < NUM_POINTS; i++) {    
+        lidarPoints[i] = (int) str[i].toInt();  // .toInt returns a long, hence the (int)
+      }
+      
+     }
     // Convert strings to ints and store in global array
-    for (int i = 0; i < NUM_POINTS; i++) {    
-      lidarPoints[i] = (int) str[i].toInt();  //TODO: which one to use? (int) or .toInt()?
+    for (int i = 0; i < NUM_POINTS; i++) {
+      lastPoints[i] = lidarPoints[i];        //remember old points.
+      lidarPoints[i] = (int) str[i].toInt(); //store new points
     }
 
 //    //debugging
@@ -735,15 +789,13 @@ boolean getLidar() {
 //      Serial.print('\t');
 //    }
 //    Serial.println();
+    receiptErrorNum = 1; //reset the error counter
+    return 1; //return 1 for good data recieved
     
-    return true;
-    
-  }else {
-    //if recieve failed,return false
-
+  }else { //data receipt failed
 //    Serial.println(F("Failed to get LiDAR data. Possible lack of terminating character."));
-
-    return false;
+    receiptErrorNum = receiptErrorNum++;
+    return receiptErrorNum;
   }
 }
 
