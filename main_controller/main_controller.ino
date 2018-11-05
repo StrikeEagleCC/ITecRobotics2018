@@ -75,12 +75,10 @@ const byte rtTargetDetect  = 21;
  * controller by uploading the PS3BT example sketch and observing the serial
  * monitor while moving the sticks around.
  */
-int ltAnalogXDeadZone[2] = {115, 147};
-int ltAnalogYDeadZone[2] = {101, 142};
-int rtAnalogXDeadZone[2] = {115, 147};
-int rtAnalogYDeadZone[2] = {115, 150};
-int analogL2DeadZone = 0; //the L2 sticks only need a single value, since they rest at one extreme of their physical travel.
-int analogR2DeadZone = 0;
+const int ltAnalogXDeadZone[2] = {115, 147};
+const int ltAnalogYDeadZone[2] = {101, 142};
+const int rtAnalogXDeadZone[2] = {115, 147};
+const int rtAnalogYDeadZone[2] = {115, 150};
 
 float ltAnalogXScaler = .3;  //scales down the input from the axes. Values range from 0-1
 float ltAnalogYScaler = 1;
@@ -91,32 +89,54 @@ float analogR2Scaler = 1;
 
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~ DRIVING SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~*/
-int steeringTrim      = 0.0;   // In radians, negative for left bias, positive for right bias
+const int steeringTrim      = 0.0;   // In radians, negative for left bias, positive for right bias
 unsigned int accelerationTime  = 1000;  //milliseconds to transition from full reverse to full forward. Higher value means slower acceleration (and deceleration)
+const int normalSpeed[2] = {-50000, 50000};
+const int speedModeSpeed[2] = {-150000, 150000};
+
+/*~~~~~~~~~~~~~~~~~~~~~~~~ AUTOMODE SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~*/
+const unsigned int followSpeed     = 20;
+const unsigned int turnTowardSpeed = 20;
+const unsigned int turnTowardTime  = 2;
+const unsigned int turnAwaySpeed   = 20;
+const unsigned int turnAwayTime    = 2;
+const unsigned int preTurnSpeed    = 20;
+const unsigned int preTurnTime     = 2;
+const unsigned int postTurnSpeed   = 20;
+const unsigned int postTurnTime    = 2;
+
+const unsigned int followDistance  = 140;
+const unsigned int frontDistance   = 140;
+const unsigned int followLimit     = 50;
+
+
+//constants for PID control
+const float KP = .001;
+const float KI = 0.0;
+const float KD = 1.0;
 
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~~ SERVO SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~~*/
-
 // Servo preset positions
-int armBaseHomePos  = 251;
-int armMidHomePos   = 782;
-int wristHomePos    = 511;
-int gripperHomePos  = 553;
+const int armBaseHomePos  = 251;
+const int armMidHomePos   = 782;
+const int wristHomePos    = 511;
+const int gripperHomePos  = 553;
 
-int armBaseReadyPos  = 312;
-int armMidReadyPos   = 745;
-int wristReadyPos    = 511;
-int gripperReadyPos  = 553;
+const int armBaseReadyPos  = 312;
+const int armMidReadyPos   = 745;
+const int wristReadyPos    = 511;
+const int gripperReadyPos  = 553;
 
 /* Position limits are stored as arrays. The first value is the lowest a
  *  servo can safely move given it's construction, and the second value
  *  is the highest. These values can be determined by running the "Servo Position" 
  *  sketch, and watching the serial monitor while manipulating the servos manually.
  */
-int armBasePosLimit[2]  = {251,934};  // low and high limits, respectively
-int armMidPosLimit[2]   = {20, 780};
-int wristPosLimit[2]    = {244, 641};
-int gripperPosLimit[2]  = {84, 553};
+const int armBasePosLimit[2]  = {251,934};  // low and high limits, respectively
+const int armMidPosLimit[2]   = {20, 780};
+const int wristPosLimit[2]    = {244, 641};
+const int gripperPosLimit[2]  = {84, 553};
 
 /* This variable helps to keep servo response speed consistent regardless
  *  of how fast loop() is running.
@@ -178,18 +198,20 @@ long armMidAngleLimit[2]   = {0,0};
 long wristAngleLimit[2]    = {0,0};
 long gripperAngleLimit[2]  = {0,0};
 
-//autoMode drive command variables
-float steeringThetaAuto = 0;
-float driveRAuto        = 0;
+//autoMode variables
+float   steeringThetaAuto = 0;   //steering theta in degrees
+float   driveRAuto        = 0;
+int     whichWall         = 0;   //which wall to follow. 0- undecided, 1-left wall, 2-right wall
 
-long motorPos[2] = {0, 0};  // motor positions, lt and rt respectively
+unsigned int lidarPoints[NUM_POINTS];
+unsigned int lastPoints[NUM_POINTS];
+
+//long motorPos[2] = {0, 0};  // motor positions, lt and rt respectively
 
 unsigned long currentMillis  = 0;
 volatile byte targetSide = 0;  // 0 = no target, 1 = left side, 2 = right side
 boolean targetDetected = false;
 
-unsigned int lidarPoints[NUM_POINTS];
-unsigned int lastPoints[NUM_POINTS];
 
 
 void setup() {
@@ -405,16 +427,16 @@ void driveCtl() {
 
     //Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
 
-    LWS = map(LWS, -90, 90, -150000, 150000);
-    RWS = map(RWS, -90, 90, -150000, 150000);
+    LWS = map(LWS, -90, 90, speedModeSpeed[0], speedModeSpeed[1]);
+    RWS = map(RWS, -90, 90, speedModeSpeed[0], speedModeSpeed[1]);
     
     //Serial << "Wheel after mapping: \tLT: " << LWS << "\tRT: " << RWS << '\n';
     
   }else {
 //    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
 
-    LWS = map(LWS, -128, 128, -50000, 50000);
-    RWS = map(RWS, -128, 128, -50000, 50000);
+    LWS = map(LWS, -128, 128, normalSpeed[0], normalSpeed[1]);
+    RWS = map(RWS, -128, 128, normalSpeed[0], normalSpeed[2]);
 
 //    Serial <<"Wheel after mapping:\t LT: " << LWS << "\tRT: " << RWS << '\n';
   }
@@ -441,13 +463,189 @@ static unsigned long buzzerMillis = 0;
     return;
   }
 
-  //get directions from ROS and convert to int
-  getLidar();
+  //get lidar points
+  int lidarStatus = getLidar();
 
-  if (lidarPoints[1] > 300) {
+  //if we're waiting on a response, return.
+  if (lidarStatus == 0) { return; }
+
+  //if we've had a bunch of timeouts or bad data in a row, stop moving
+  if (lidarStatus > 3) { // 3 = allow only two consectuve errors
     steeringThetaAuto = 0;
-    driveRAuto = 63;
-  } else driveRAuto = 0;
+    driveRAuto = 0;
+    return;
+  }
+
+  //store lidarPoints as somethign friendlier to work with
+  int leftPoint = lidarPoints[0];
+  int middlePoint = lidarPoints[1];
+  int rightPoint = lidarPoints[2];
+
+  if (whichWall == 0) {
+    //decide which wall to follow
+    if (leftPoint <= rightPoint) {
+      whichWall = 1;
+    }else { whichWall = 2; }
+  }
+
+  /*activity codes: 0 - wall follow
+   *                1 - pre/post turn
+   *                2 - turn towards follow side
+   *                3 - turn away from follow side
+   */
+  static byte activity = 0;
+  static byte lastActivity = 0;
+  static unsigned long eventTimer = 0;
+  boolean returnToFollow = false;
+
+  
+  //check for obstacle in front of us
+  if (middlePoint < frontDistance) {
+    driveRAuto = 0;
+    steeringThetaAuto = 0;
+    eventTimer = millis();
+    lastActivity = activity;
+    activity = 3;
+  }
+
+  switch (activity) {
+    case 0: //wall follow
+
+      //implement PD control
+      int error;
+      static int lastError;
+
+      /*calculate error depending on which wall we're following. 
+       *negative errors will veer right, positive errors will veer left.*/
+      if (whichWall == 1) { error = leftPoint - followDistance; }
+      else { error = followDistance - rightPoint;}
+
+      //if the error is large, start a turn
+      if (abs(error) > followLimit) {
+        steeringThetaAuto = 0;
+        eventTimer = millis();
+        lastActivity = activity;
+        activity = 1;
+        break;
+      }
+      
+      //calculate correction
+      float correctionAngle = KP * error + KI * (error + lastError) + KD * (error - lastError);
+      lastError = error;
+
+      steeringThetaAuto = correctionAngle;
+      driveRAuto = followSpeed;
+      break;
+
+    case 1: //pre/post turn straight
+      //check to see if there is a wall to follow
+      /* WARNING: this  return to follow code is copied and re-used
+       * in several places. Make sure changes are reflected in each place.
+       * TODO: break this out into a function or something.*/
+      returnToFollow = false;
+      if (whichWall == 1 && leftPoint < followDistance) {
+        returnToFollow = true;
+      }else if (whichWall == 2 && rightPoint < followDistance) {
+        returnToFollow = true;
+      }
+      if (returnToFollow) {
+        steeringThetaAuto = 0;
+        lastActivity = activity;
+        activity = 0;
+        break;
+      }
+
+
+      unsigned long straightTime = preTurnTime;
+      if (lastActivity == 2 ) { straightTime = postTurnTime; }
+      
+      //if the timer has expired, proceed with turn toward follow side      
+      if (millis() - eventTimer > straightTime) {
+        steeringThetaAuto = 0;
+        driveRAuto = 0;
+        eventTimer = millis();
+        lastActivity = activity;
+        activity = 2;
+        break;
+      }
+      steeringThetaAuto = 0;
+      driveRAuto = followSpeed;
+      break;
+      
+    case 2: //turn towards follow side
+      //check to see if there is a wall to follow
+      /* WARNING: this  return to follow code is copied and re-used
+       * in several places. Make sure changes are reflected in each place.
+       * TODO: break this out into a function or something.*/
+      returnToFollow = false;
+      if (whichWall == 1 && leftPoint < followDistance) {
+        returnToFollow = true;
+      }else if (whichWall == 2 && rightPoint < followDistance) {
+        returnToFollow = true;
+      }
+      if (returnToFollow) {
+        steeringThetaAuto = 0;
+        lastActivity = activity;
+        activity = 0;
+        break;
+      }
+
+      // If timer has expired, proceed with post-turn activity
+      if (millis() - eventTimer > turnTowardTime) {
+        steeringThetaAuto = 0;
+        lastActivity = activity;
+        activity = 1;
+        break;
+      }
+
+      //otherwise, keep turning
+      //TODO: determine correct theta
+      steeringThetaAuto = 90;
+      driveRAuto = turnTowardSpeed;
+
+      //if we're following the right wall, steering angle needs to be negative
+      if (whichWall == 2) { steeringThetaAuto = -steeringThetaAuto; }
+      break;
+      
+    case 3: //turn away from follow side
+      //check to see if there is a wall to follow
+      /* WARNING: this  return to follow code is copied and re-used
+       * in several places. Make sure changes are reflected in each place.
+       * TODO: break this out into a function or something.*/
+      returnToFollow = false;
+      if (whichWall == 1 && leftPoint < followDistance) {
+        returnToFollow = true;
+      }else if (whichWall == 2 && rightPoint < followDistance) {
+        returnToFollow = true;
+      }
+      if (returnToFollow) {
+        steeringThetaAuto = 0;
+        lastActivity = activity;
+        activity = 0;
+        break;
+      }
+
+      if (millis() - eventTimer > turnAwayTime) {
+        //go straight until a wall or obstacle is picked up
+        steeringThetaAuto = 0;
+        driveRAuto = turnAwaySpeed;
+        break;
+      }
+
+      //otherwise, keep turning
+      //TODO: figure out correct theta
+      steeringThetaAuto = -90;
+      driveRAuto = turnAwaySpeed;
+
+      //if we're following the right wall, the angle should be positive
+      if (whichWall = 2) { steeringThetaAuto = -steeringThetaAuto; }
+      break;
+
+    default:
+      steeringThetaAuto = 0;
+      driveRAuto = 0;
+      break;
+  }
 }
 
 void autoModeSwitch() {
@@ -469,6 +667,8 @@ void autoModeSwitch() {
     for (int i = 0; i < NUM_POINTS; i++) {
       lastPoints[i] = 0;
     }
+
+    whichWall = 0; //reset which wall to follow
     
   }else if ((start && autoMode) || !controllerConnected()){ //exit automode
     autoMode = false;
@@ -685,7 +885,7 @@ int getLidar() {
    *  3 - request timed out, or bad data second time in a row
    */
    
-  static int receiptErrorNum = 1;  //keep track of how many errors we get. Start at 1 
+  static byte receiptErrorNum = 1;  //keep track of how many errors we get. Start at 1 
                                    //so the smallest value that could get returned is 2 after being incremented
   static unsigned long requestTime; //for the timer
   static boolean requested = false; //to know whether to keep asking for data
@@ -707,6 +907,7 @@ int getLidar() {
 //    Serial.println(F("\nRequest for lidar points timed out"));
 
     //request timed out, so increment the error number
+    if (receiptErrorNum > 254) { receiptErrorNum = 254; } //keep it from rolling over
     receiptErrorNum = receiptErrorNum++;
 
     //return the appropriate code for the number of errors
@@ -794,6 +995,8 @@ int getLidar() {
     
   }else { //data receipt failed
 //    Serial.println(F("Failed to get LiDAR data. Possible lack of terminating character."));
+
+    if (receiptErrorNum > 254) { receiptErrorNum = 254; } //keep it from rolling over.
     receiptErrorNum = receiptErrorNum++;
     return receiptErrorNum;
   }
