@@ -86,7 +86,7 @@ const int ltAnalogYDeadZone[2] = {101, 142};
 const int rtAnalogXDeadZone[2] = {115, 147};
 const int rtAnalogYDeadZone[2] = {115, 150};
 
-float ltAnalogXScaler = .3;  //scales down the input from the axes. Values range from 0-1
+float ltAnalogXScaler = .2;  //scales down the input from the axes. Values range from 0-1
 float ltAnalogYScaler = 1;
 float rtAnalogXScaler = 1;
 float rtAnalogYScaler = 1;
@@ -100,21 +100,18 @@ float analogR2Scaler = 1;
 const int steeringTrim      = 0.0;   // In radians, negative for left bias, positive for right bias
 unsigned int accelerationTime  = 1000;  //milliseconds to transition from full reverse to full forward. Higher value means slower acceleration (and deceleration)
 const long normalSpeed[2] = { -50000, 50000};
-const long speedModeSpeed[2] = { -150000, 150000};
+const long speedModeSpeed[2] = { -120000, 120000};
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~ AUTOMODE SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~*/
-const unsigned int       baseSpeed       = 128;
-const unsigned int followSpeed     = 128;
-const unsigned int turnTowardSpeed = 128;
-const unsigned int turnAwaySpeed   = 60;
-const unsigned int preTurnSpeed    = 128;
-const unsigned int postTurnSpeed   = 128;
-const unsigned int turnTowardTime  = 1300;
+const unsigned int baseSpeed       = 80;
+const unsigned int turnTowardTime  = 1700;
 const unsigned int turnAwayTime    = 2000;
-const unsigned int preTurnTime     = 50 ;
+const unsigned int preTurnTime     = 300 ;
 const unsigned int postTurnTime    = 50;
 
-const unsigned int followDistance  = 290; //how close to follow a wall
+static unsigned long autoModeTimer;
+
+const unsigned int followDistance  = 265; //how close to follow a wall
 const unsigned int frontDistance   = 270; // how close the robot can get to an obstacle in front before reacting
 const unsigned int cornerDistance  = 140; //todo implement corner checking
 const int followLimit     = 100;  //sets how steeply a wall can drop away before starting a turn
@@ -123,7 +120,7 @@ const int followLimit     = 100;  //sets how steeply a wall can drop away before
 //constants for PID control
 const float KP = 0.4;
 const float KI = 0.0;
-const float KD = 0.4;
+const float KD = 0.1;
 
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~~ SERVO SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~~*/
@@ -260,7 +257,7 @@ void setup() {
   digitalWrite(buzzer, LOW);
 
   // Start Serial ports
-  Serial.begin(230400);
+  Serial.begin(115200);
   odrive_serial.begin(115200);
   servo_serial.begin(115200);
   ROS_serial.begin(115200);
@@ -315,7 +312,7 @@ void loop() {
   getCtlInputs();
 
   // Monitor for shutdown signal
-  if (dPadUp) killPower();
+  if (dPadUp && cross) killPower();
 
   inputCtlMod();
 
@@ -393,11 +390,11 @@ void driveCtl() {
   unsigned long elapsed = currentMillis - accMillis;
   accMillis = currentMillis;
 
-  if (elapsed < accelerationTime) {  //only apply acceleration limits if code is running fast enough
+  if (elapsed < accelerationTime && !targetDetected) {  //only apply acceleration limits if code is running fast enough
     // Determine acceleration increment
     float accelerationInc;
     accelerationInc = (elapsed) / ((float) accelerationTime) * 65408; //65,408: the effective limit on wheel speed
-
+    if (speedMode) accelerationInc = accelerationInc * 2;
     // Apply limits to left wheel wheel speed
     long LWSdiff = LWS - lastLWS;
     if (abs(LWSdiff) > accelerationInc) {
@@ -498,58 +495,89 @@ void autoModeCtl() {
   unsigned int frontPoint = lidarPoints[4];
   unsigned int rightPoint = lidarPoints[8];
 
+  static int spinCounter = 0;
+  static unsigned long turnTimer;
+
+  
+
   //convert corner points to front point
   unsigned int closestPoint = 5000;
   unsigned int cornerPoint = 5000;
-  if(lidarPoints[1] < 165) {
-    cornerPoint = (float) lidarPoints[1] * .3827;
-    if (cornerPoint < closestPoint) { closestPoint = cornerPoint; }
+  boolean cornerObstructed = false;
+  
+  //front angle point calculations
+  if(true) { //here so I can collapse this code
+  if(lidarPoints[1] < 200) {
+    cornerObstructed = true;
+    if(lidarPoints[1] < 180) {
+      cornerPoint = (float) lidarPoints[1] * .3827;
+      if (cornerPoint < closestPoint) { closestPoint = cornerPoint; }
+    }
   }
   
-  if(lidarPoints[7] < 165) {
-    cornerPoint = lidarPoints[7] * .3827;
-    if (cornerPoint < closestPoint) { closestPoint = cornerPoint; }
+  if(lidarPoints[7] < 200) {
+    cornerObstructed = true;
+    if(lidarPoints[2] < 180) {
+      cornerPoint = lidarPoints[7] * .3827;
+      if (cornerPoint < closestPoint) { closestPoint = cornerPoint; }
+    }
   }
   
-  if(lidarPoints[2] < 208) {
-    cornerPoint = lidarPoints[2] * .7071;
-    if (cornerPoint < closestPoint) { closestPoint = cornerPoint; }
+  if(lidarPoints[2] < 220) {
+    cornerObstructed = true;
+    if(lidarPoints[2] < 200) {
+      cornerPoint = lidarPoints[2] * .7071;
+      if (cornerPoint < closestPoint) { closestPoint = cornerPoint; }
+    }
   }
   
-  if(lidarPoints[6] < 208) {
-    cornerPoint = lidarPoints[6] * .7071;
-    if (cornerPoint < closestPoint) { closestPoint = cornerPoint; }
+  if(lidarPoints[6] < 220) {
+    cornerObstructed = true;
+    if(lidarPoints[6] < 200) {
+      cornerPoint = lidarPoints[6] * .7071;
+      if (cornerPoint < closestPoint) { closestPoint = cornerPoint; }
+    }
   }
   
   if(lidarPoints[3] < 400) {
-    cornerPoint = lidarPoints[3] * .9763;
-    if (cornerPoint < closestPoint) { closestPoint = cornerPoint; }
+    cornerObstructed = true;
+    if(lidarPoints[3] < frontDistance) {
+      cornerPoint = lidarPoints[3] * .9763;
+      if (cornerPoint < closestPoint) { closestPoint = cornerPoint; }
+    }
   }
   
   if(lidarPoints[5] < 400) {
-    cornerPoint = lidarPoints[5] * .9763;
-    if (cornerPoint < closestPoint) { closestPoint = cornerPoint; }
+    cornerObstructed = true;
+    if(lidarPoints[4] < frontDistance) {
+      cornerPoint = lidarPoints[5] * .9763;
+      if (cornerPoint < closestPoint) { closestPoint = cornerPoint; }
+    }
   }
 
   if (closestPoint < frontPoint) { frontPoint = closestPoint; }
-
+  }
+  if (cornerObstructed) Serial << "Corner obstructed" ;
   Serial << "FrontPoint: " << frontPoint << '\n';
 
-  static byte activity = 0;
-  static byte lastActivity = 0;
-  static unsigned long eventTimer = 0;
+  static byte activity;
+  static byte lastActivity;
+  static unsigned long eventTimer;
   boolean returnToFollow = false;
 
   float correctionAngle = 0;
   int error;
-  static int lastError;
 
-  unsigned long straightTime = preTurnTime;
+  static unsigned long straightTime;
+  if (activity == 2) { straightTime = preTurnTime; }
+  if (lastActivity == 2 ) { straightTime = postTurnTime; }
 
-
-
-  if (whichWall == 0) {
-    activity = 0;
+  if (whichWall == 0) {  //effectively a first run function. Will only run when automode is first started.
+    if (leftPoint > followDistance && rightPoint > followDistance) { //if the robot is being 'aimed', go straight until hitting something
+      activity = 1;
+      straightTime = 100000;
+      Serial << "Gonna start by going straight . . . \n";
+    } else { activity = 0; }
     lastActivity = 0;
 
     //decide which wall to follow
@@ -558,9 +586,9 @@ void autoModeCtl() {
     } else {
       whichWall = 2;
     }
-
-    Serial << "Following wall " << whichWall;
+    Serial << "Following wall " << whichWall << '\n';
   }
+
 
   /*activity codes: 0 - wall follow
                     1 - pre/post turn
@@ -580,9 +608,39 @@ void autoModeCtl() {
     activity = 3;
   }
 
+    static int turnCounter = 0;
+    Serial << "Turn Counter: " << turnCounter << '\n';
+  if (activity != 1) {
+    if (activity != 2) {
+      turnCounter = 0;  //if we do anything other than turn, reset the turn counter
+    }
+  }
+  if (turnCounter > 5) { //if we're in a spin, recover.
+    straightTime = 100000;
+    activity =1;
+    Serial << "We're in a spin bro...\n";
+  }  
 
+  static boolean switchedWalls = false; //if it's taking forever to find the target, try somethign else
+  if (!switchedWalls && (millis() - autoModeTimer > 300000)) {
+    if (whichWall == 1) {
+      whichWall = 2;
+    } else { whichWall = 1; }
+    switchedWalls = true;
+  }
 
   Serial << "Starting activity " << activity << '\n';
+
+  //variables for inside the switch case  (apparently they shouldn't be declared inside?)
+
+  unsigned int followError;
+  const static int numErrors = 5;
+  static int errorHistoryIndex;
+  static unsigned int errorHistory[numErrors];
+  static unsigned int lastError = 0;
+  float weightedSum;
+  float weightedDivisor;
+  float weight = 2.; //larger numbers cause less weight
 
   switch (activity) {
     case 0: //wall follow
@@ -603,18 +661,49 @@ void autoModeCtl() {
         //        Serial << "Large error. Starting turn...\n";
         steeringThetaAuto = 0;
         eventTimer = millis();
+        straightTime = preTurnTime;
         lastActivity = activity;
         activity = 1;
         break;
       }
 
-
-      //calculate correction
-
-      if (whichWall == 2) {
-        error = -error;
+      //average some errors
+      /* The first time through this case after coming from another, 
+       * pre-fill error history with current error 
+       */
+      if (activity != lastActivity) { // this is the first time through following, fill error history with current error
+        Serial << "First time through this case...";
+        errorHistoryIndex = 0;
+        lastError = error;
+        for (int i = 0; i < numErrors; i++)
+          errorHistory[i] = error;
       }
-      correctionAngle = KP * error + KD * (error - lastError);
+      
+      errorHistory[errorHistoryIndex] = error;
+      errorHistoryIndex = errorHistoryIndex++;
+      
+
+      for (int i = 0; i < numErrors; i++) {
+        int j = errorHistoryIndex;
+        if (j == (numErrors - 1)) { j = 0; }
+        weightedSum = weightedSum + (float) errorHistory[j] / pow(weight,j);
+        weightedDivisor = weightedDivisor + 1 / pow(weight, j);
+      }
+      followError = (int) (weightedSum / weightedDivisor);
+      
+      //calculate correction
+      if (whichWall == 2) {
+        followError = -followError;
+      }
+
+//      correctionAngle = KP * error + KD * (followError - lastError);
+//      correctionAngle = constrain(correctionAngle, -25., 25.);
+//      lastError = followError;
+
+
+      if(whichWall == 2 ) error = -error;
+
+      correctionAngle = KP * error; + KD * (error - lastError);
       correctionAngle = constrain(correctionAngle, -25., 25.);
       lastError = error;
 
@@ -622,11 +711,14 @@ void autoModeCtl() {
 
       steeringThetaAuto = correctionAngle;
 
-      if (frontPoint < (2 * frontDistance)) {
+      if (frontPoint < (2 * frontDistance) || cornerObstructed) {
+        Serial << "slowing down..";
         driveRAuto = baseSpeed / 2;
       }else {
         driveRAuto = baseSpeed;
       }
+
+      lastActivity = activity;
       break;
 
     case 1: //pre/post turn straight
@@ -650,9 +742,6 @@ void autoModeCtl() {
       }
 
 
-      if (lastActivity == 2 ) {
-        straightTime = postTurnTime;
-      }
 
       //if the timer has expired, proceed with turn toward follow side
       if (millis() - eventTimer > straightTime) {
@@ -664,7 +753,12 @@ void autoModeCtl() {
         break;
       }
       steeringThetaAuto = 0;
-      driveRAuto = followSpeed;
+      
+      if (frontPoint < (2 * frontDistance) || cornerObstructed) {
+        driveRAuto = baseSpeed / 2;
+      }else {
+        driveRAuto = baseSpeed;
+      }
       break;
 
     case 2: //turn towards follow side
@@ -691,7 +785,10 @@ void autoModeCtl() {
       // If timer has expired, proceed with post-turn activity
       if (millis() - eventTimer > turnTowardTime) {
         steeringThetaAuto = 0;
+        turnCounter = turnCounter + 1;
+        Serial << "Incrementing Turn Counter ... turn counter is now " << turnCounter << '\n';
         eventTimer = millis();
+        straightTime = postTurnTime;
         lastActivity = activity;
         activity = 1;
         break;
@@ -699,16 +796,22 @@ void autoModeCtl() {
 
       //otherwise, keep turning
       //TODO: determine correct theta
-      steeringThetaAuto = 25;
-      if ((whichWall == 1 && leftPoint < (2 * followDistance)) || (whichWall == 2 && rightPoint < (2 * followDistance))){
-        driveRAuto = baseSpeed / 2;
-      } else {
-        driveRAuto = baseSpeed;
-      }
+      steeringThetaAuto = 30;
+      
       //if we're following the right wall, steering angle needs to be negative
       if (whichWall == 2) {
         steeringThetaAuto = -steeringThetaAuto;
       }
+      
+      if ( (whichWall == 1 && leftPoint      < (2 * followDistance))
+        || (whichWall == 2 && rightPoint     < (2 * followDistance))
+        || (whichWall == 1 && lidarPoints[1] < (2 * followDistance)) 
+        || (whichWall == 2 && lidarPoints[7] < (2 * followDistance))){
+        driveRAuto = baseSpeed / 2;
+      } else {
+        driveRAuto = baseSpeed;
+      }
+      
       break;
 
     case 3: //turn away from follow side
@@ -723,15 +826,25 @@ void autoModeCtl() {
       //otherwise, keep turning
       //TODO: figure out correct theta
       steeringThetaAuto = -90;
-      driveRAuto = baseSpeed / 4 ;
 
       //if we're following the right wall, the angle should be positive
       if (whichWall == 2) {
         steeringThetaAuto = -steeringThetaAuto;
       }
+
+      if ( (whichWall == 1 && leftPoint      < (2 * followDistance))
+        || (whichWall == 2 && rightPoint     < (2 * followDistance))
+        || (whichWall == 1 && lidarPoints[1] < (2 * followDistance)) 
+        || (whichWall == 2 && lidarPoints[7] < (2 * followDistance))){
+        driveRAuto = baseSpeed / 2;
+      } else {
+        driveRAuto = baseSpeed;
+      }
+      
       break;
 
-    case 4: //recover from blind spin
+    case 4: //starting case only, if no walls are within the follow distance, then go straight until you hit something
+    break;
 
     default:
       Serial.println("landed in default case");
@@ -744,34 +857,36 @@ void autoModeCtl() {
 void autoModeSwitch() {
   if (!autoMode) { //initialize automode if the arm is home, and we're not already in automode put armhome back in htere
     autoMode = true;
-    targetDetected = false;
-    noInterrupts();        //disable interrupts while modifying a volitile variable
-    targetSide = 0;
-    interrupts();
     digitalWrite(autoModeLED, HIGH);
+    autoModeTimer = millis();
     //    Serial.println("Automode!");
-
-    //clear the input buffer before requesting data first
-    while (ROS_serial.available() > 0) {
-      char c = ROS_serial.read();
-    }
-
-    //clear the lastPoints array
-    for (int i = 0; i < NUM_POINTS; i++) {
-      lastPoints[i] = 0;
-    }
-
-    whichWall = 0; //reset which wall to follow
-
-    lidarFirstRequest = true;
-
   } else if ((start && autoMode) || !controllerConnected()) { //exit automode
     autoMode = false;
-    targetDetected = false;
     digitalWrite(autoModeLED, LOW);
     //    Serial.println("No Automode!");
-    //TODO: tellROS we're no longer in autoMode
   }
+  
+  //clear the lastPoints array
+  for (int i = 0; i < NUM_POINTS; i++) {
+    lastPoints[i] = 0;
+  }
+  
+  lidarFirstRequest = true;
+  
+  //disable interrupts while modifying a volitile variable
+  noInterrupts();        
+  targetSide = 0;
+  interrupts();
+  
+  //clear the input buffer
+  while (ROS_serial.available() > 0) {
+    char c = ROS_serial.read();
+  }
+  
+  //reset which wall to follow
+  whichWall = 0;
+  targetDetected = false;
+  
 }
 
 void armCtl() {
