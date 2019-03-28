@@ -208,6 +208,9 @@ long armMidAngleLimit[2]   = {0, 0};
 long wristAngleLimit[2]    = {0, 0};
 long gripperAngleLimit[2]  = {0, 0};
 
+//driveCtl variables
+static int driveMode = 0;  // Drive modes: 0=normal; 1= fast; 2= crawl
+
 //autoMode variables
 float   steeringThetaAuto = 0;   //steering theta in degrees
 float   driveRAuto        = 0;
@@ -315,6 +318,8 @@ void loop() {
   // Monitor for shutdown signal
   if (dPadUp && cross) killPower();
 
+  if (start) autoModeSwitch();
+
   inputCtlMod();
 
   // Enable control of arm only if not in auto mode
@@ -336,8 +341,6 @@ void driveCtl() {
      as forward velocity increases.
   */
 
-  // Drive modes: 0=normal; 1= fast; 2= crawl
-  static int driveMode = 0;
   static long LWS = 0;
   static long RWS = 0;
   static long LWP = 0;
@@ -351,11 +354,6 @@ void driveCtl() {
   // Change drive mode if robot is stopped and stick inputs are zero
   if (lastLWS == 0 && lastRWS == 0 && ltAnalogY ==0 && ltAnalogX ==0) {
 
-    // engage automode
-    if(start) {
-      autoModeSwitch();
-      sqr = true; // trigger change to normal drive mode
-    }
     // if current mode is crawl and being changed to normal or fast, put ODrive in velocity control
     if(driveMode == 0 && (sqr || tri)) {
       // Set velocities to zero prior to changing to velocity control mode
@@ -891,12 +889,12 @@ void autoModeCtl() {
 }
 
 void autoModeSwitch() {
-  if (!autoMode) { //initialize automode if the arm is home, and we're not already in automode put armhome back in htere
+  if (!autoMode && driveMode==0 ) { //initialize automode only if in normal drive mode
     autoMode = true;
     digitalWrite(autoModeLED, HIGH);
     autoModeTimer = millis();
     //    Serial.println("Automode!");
-  } else if ((start && autoMode) || !controllerConnected()) { //exit automode
+  } else if (autoMode || !controllerConnected()) { //exit automode
     autoMode = false;
     digitalWrite(autoModeLED, LOW);
     //    Serial.println("No Automode!");
