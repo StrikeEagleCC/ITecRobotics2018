@@ -99,8 +99,9 @@ float analogR2Scaler = 1;
 /*~~~~~~~~~~~~~~~~~~~~~~~~ DRIVING SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~*/
 const int steeringTrim      = 0.0;   // In radians, negative for left bias, positive for right bias
 unsigned int accelerationTime  = 1000;  //milliseconds to transition from full reverse to full forward. Higher value means slower acceleration (and deceleration)
-const long normalSpeed[2] = { -50000, 50000};
-const long speedModeSpeed[2] = { -120000, 120000};
+const long normalSpeed = 50000;
+const long fastSpeed = 120000;
+const int  crawlSpeed = 10;
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~ AUTOMODE SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~*/
 const unsigned int baseSpeed       = 80;
@@ -206,6 +207,9 @@ long armBaseAngleLimit[2]  = {0, 0}; // We'll calculate these from the PosLimits
 long armMidAngleLimit[2]   = {0, 0};
 long wristAngleLimit[2]    = {0, 0};
 long gripperAngleLimit[2]  = {0, 0};
+
+//driveCtl variables
+static int driveMode = 0;  // Drive modes: 0=normal; 1= fast; 2= crawl
 
 //autoMode variables
 float   steeringThetaAuto = 0;   //steering theta in degrees
@@ -314,10 +318,9 @@ void loop() {
   // Monitor for shutdown signal
   if (dPadUp && cross) killPower();
 
-  inputCtlMod();
-
-  // Toggle auto mode
   if (start) autoModeSwitch();
+
+  inputCtlMod();
 
   // Enable control of arm only if not in auto mode
   if (!autoMode) armCtl();
@@ -338,21 +341,65 @@ void driveCtl() {
      as forward velocity increases.
   */
 
-  static boolean speedMode = false;
-
-  //Convert lt analog stick X and Y coordinates to polar coordinates
+  static long LWS = 0;
+  static long RWS = 0;
+  static long LWP = 0;
+  static long RWP = 0;
+  static long lastLWS = 0;
+  static long lastRWS = 0;
   float steeringTheta;
   float driveR;
 
+
+  // Change drive mode if robot is stopped and stick inputs are zero
+  if (lastLWS == 0 && lastRWS == 0 && ltAnalogY ==0 && ltAnalogX ==0) {
+
+    // if current mode is crawl and being changed to normal or fast, put ODrive in velocity control
+    if(driveMode == 0 && (sqr || tri)) {
+      // Set velocities to zero prior to changing to velocity control mode
+      odrive.SetVelocity(0, 0);
+      odrive.SetVelocity(1, 0);
+
+      // Change ODrive to velocity control mode
+      odrive_serial << "w axis0.controller.config.control_mode 2\n";
+      odrive_serial << "w axis1.controller.config.control_mode 2\n";
+    }
+    if(sqr && driveMode != 0) {  // normal mode
+      driveMode = 0; 
+      tone(buzzer, 1000, 250);
+    }
+    if(tri && driveMode != 1) {  // fast mode
+      driveMode = 1; 
+      tone(buzzer, 1500, 250);
+    }
+    if(cross && driveMode != 2) { // crawl mode
+      driveMode = 2; 
+      tone(buzzer, 500, 500);
+
+      // Get current encoder positions
+      odrive_serial << "r axis0.encoder.pos_estimate\n";
+      LWP = odrive.readInt();
+      delay(1);
+      odrive_serial << "r axis1.encoder.pos_estimate\n";
+      RWP = odrive.readInt();
+
+      // Set positions to current position prior to changing to position control mode
+      odrive.SetPosition(0, LWP);
+      odrive.SetPosition(1, RWP);
+
+      // Change ODrive to position control mode
+      odrive_serial << "w axis0.controller.config.control_mode 3\n";
+      odrive_serial << "w axis1.controller.config.control_mode 3\n";
+    }
+  }
+
   if (!autoMode) { //only consider stick input when not in auto mode
+    //Convert lt analog stick X and Y coordinates to polar coordinates
     steeringTheta = atan2(ltAnalogY, ltAnalogX); //determine angle of velocity vector
     driveR = sqrt(square(ltAnalogX) + square(ltAnalogY)); //determine the magnitude of the velocity vector
     driveR = constrain(driveR, 0.0, 128.0);
 
-    //    Serial << "X: " << ltAnalogX << "\tY: " << ltAnalogY << "\tTheta: " << steeringTheta << '\n';
-
   } else if (!targetDetected) { //only consider auto inputs if the target hasn't been detected
-    speedMode = false; //don't go running off in automode
     steeringTheta = steeringThetaAuto * PI / 180 + (PI / 2);
     driveR = driveRAuto;
   } else { //if in auto mode, and a target has been detected, stop.
@@ -371,14 +418,9 @@ void driveCtl() {
   */
   unsigned int driveRscaled = driveR * 511.0; //scale up for application of acceleration limits. effectively constrained to 65,408
 
-  //  Serial << "Steering Angle: \t" << (steeringTheta * 57.2957) << "\tVelocity Magnituded: \t" << driveR << "\n\n";
-
   steeringTheta = steeringTheta - (PI / 4);  // rotate vector 45 degrees (pi/4)
 
-  long LWS = 0;
-  long RWS = 0;
-  static long lastLWS = 0;
-  static long lastRWS = 0;
+
 
   //convert to cartesian and store as wheel speed
   LWS = driveRscaled * cos(steeringTheta);
@@ -390,11 +432,12 @@ void driveCtl() {
   unsigned long elapsed = currentMillis - accMillis;
   accMillis = currentMillis;
 
-  if (elapsed < accelerationTime && !targetDetected) {  //only apply acceleration limits if code is running fast enough
+  if (elapsed < accelerationTime && !targetDetected && driveMode != 2) {  //only apply acceleration limits if code is running fast enough and drive mode is not crawl
     // Determine acceleration increment
     float accelerationInc;
     accelerationInc = (elapsed) / ((float) accelerationTime) * 65408; //65,408: the effective limit on wheel speed
-    if (speedMode) accelerationInc = accelerationInc * 2;
+    if (driveMode == 1) accelerationInc = accelerationInc * 2;
+    
     // Apply limits to left wheel wheel speed
     long LWSdiff = LWS - lastLWS;
     if (abs(LWSdiff) > accelerationInc) {
@@ -414,6 +457,7 @@ void driveCtl() {
       }
     }
   }
+  
   //remember these values for the next loop.
   lastLWS = LWS;
   lastRWS = RWS;
@@ -422,47 +466,41 @@ void driveCtl() {
   LWS = map(LWS, -65408, 65408, -128, 128);
   RWS = map(RWS, -65408, 65408, 128, -128); //also reverse right motor direction
 
-  // Change mode only if the robot is stopped
-  if (tri == true && LWS == 0 && RWS == 0) {
-    speedMode = !speedMode;
-    if (speedMode) {
-      tone(buzzer, 1500, 250);
-    } else {
-      tone(buzzer, 1000, 250);
-    }
+
+  switch (driveMode) {
+    case 0: // normal drive Mode
+      LWS = map(LWS, -128, 128, -normalSpeed, normalSpeed);
+      RWS = map(RWS, -128, 128, -normalSpeed, normalSpeed);
+
+      odrive.SetVelocity(0, LWS);
+      odrive.SetVelocity(1, RWS);
+      break;
+
+    case 1: // fast mode
+      // fast mode maximizes forward velocity at the expense of control resolution and turning radius at speed
+      LWS = constrain(LWS, -90, 90);
+      RWS = constrain(RWS, -90, 90);
+      
+      LWS = map(LWS, -90, 90, -fastSpeed, fastSpeed);
+      RWS = map(RWS, -90, 90, -fastSpeed, fastSpeed);
+      
+      odrive.SetVelocity(0, LWS);
+      odrive.SetVelocity(1, RWS);
+      break;
+
+    case 2: // crawl mode
+      LWP = LWP + map(LWS, -128, 128, -crawlSpeed, crawlSpeed);
+      RWP = RWP + map(RWS, -128, 128, -crawlSpeed, crawlSpeed);
+      
+      odrive.SetPosition(0, LWP);
+      odrive.SetPosition(1, RWP);
+      break;
   }
-
-  if (speedMode) {
-    // SpeedMode maximizes forward velocity at the expense of control resolution and turning radius at speed
-    LWS = constrain(LWS, -90, 90);
-    RWS = constrain(RWS, -90, 90);
-
-    //Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
-
-    LWS = map(LWS, -90, 90, speedModeSpeed[0], speedModeSpeed[1]);
-    RWS = map(RWS, -90, 90, speedModeSpeed[0], speedModeSpeed[1]);
-
-    //Serial << "Wheel after mapping: \tLT: " << LWS << "\tRT: " << RWS << '\n';
-
-  } else {
-    //    Serial <<"Wheel Speeds prior to mapping: LT: " << LWS << "\tRT: " << RWS << '\n';
-
-    LWS = map(LWS, -128, 128, normalSpeed[0], normalSpeed[1]);
-    RWS = map(RWS, -128, 128, normalSpeed[0], normalSpeed[1]);
-
-    //    Serial <<"Wheel after mapping:\t LT: " << LWS << "\tRT: " << RWS << '\n';
-  }
-
-  odrive.SetVelocity(0, LWS);
-  odrive.SetVelocity(1, RWS);
-
 }
 
 void autoModeCtl() {
 
   if (targetSide != 0 && !targetDetected) {
-    //    Serial.println("TargetFound!");
-    //TODO: tell ROS we found the target
     targetDetected = true;
   }
   static unsigned long buzzerMillis = 0;
@@ -490,15 +528,13 @@ void autoModeCtl() {
     return;
   }
 
-  //store lidarPoints as somethign friendlier to work with
+  //store lidarPoints as something friendlier to work with
   unsigned int leftPoint = lidarPoints[0];
   unsigned int frontPoint = lidarPoints[4];
   unsigned int rightPoint = lidarPoints[8];
 
   static int spinCounter = 0;
   static unsigned long turnTimer;
-
-  
 
   //convert corner points to front point
   unsigned int closestPoint = 5000;
@@ -557,8 +593,6 @@ void autoModeCtl() {
 
   if (closestPoint < frontPoint) { frontPoint = closestPoint; }
   }
-  if (cornerObstructed) Serial << "Corner obstructed" ;
-  Serial << "FrontPoint: " << frontPoint << '\n';
 
   static byte activity;
   static byte lastActivity;
@@ -576,7 +610,7 @@ void autoModeCtl() {
     if (leftPoint > followDistance && rightPoint > followDistance) { //if the robot is being 'aimed', go straight until hitting something
       activity = 1;
       straightTime = 100000;
-      Serial << "Gonna start by going straight . . . \n";
+//      Serial << "Gonna start by going straight . . . \n";
     } else { activity = 0; }
     lastActivity = 0;
 
@@ -586,7 +620,7 @@ void autoModeCtl() {
     } else {
       whichWall = 2;
     }
-    Serial << "Following wall " << whichWall << '\n';
+//    Serial << "Following wall " << whichWall << '\n';
   }
 
 
@@ -599,17 +633,17 @@ void autoModeCtl() {
 
   //check for obstacle in front of us
   if (frontPoint < frontDistance) {
-    Serial << "Obstacle in front of robot. Stopping...\n";
+//    Serial << "Obstacle in front of robot. Stopping...\n";
     driveRAuto = 0;
     steeringThetaAuto  = 0;
     eventTimer = millis();
     lastActivity = activity;
-    Serial << "Starting 'away' turn...\n";
+//    Serial << "Starting 'away' turn...\n";
     activity = 3;
   }
 
     static int turnCounter = 0;
-    Serial << "Turn Counter: " << turnCounter << '\n';
+//    Serial << "Turn Counter: " << turnCounter << '\n';
   if (activity != 1) {
     if (activity != 2) {
       turnCounter = 0;  //if we do anything other than turn, reset the turn counter
@@ -618,7 +652,7 @@ void autoModeCtl() {
   if (turnCounter > 5) { //if we're in a spin, recover.
     straightTime = 100000;
     activity =1;
-    Serial << "We're in a spin bro...\n";
+//    Serial << "We're in a spin bro...\n";
   }  
 
   static boolean switchedWalls = false; //if it's taking forever to find the target, try somethign else
@@ -629,7 +663,7 @@ void autoModeCtl() {
     switchedWalls = true;
   }
 
-  Serial << "Starting activity " << activity << '\n';
+//  Serial << "Starting activity " << activity << '\n';
 
   //variables for inside the switch case  (apparently they shouldn't be declared inside?)
 
@@ -672,7 +706,7 @@ void autoModeCtl() {
        * pre-fill error history with current error 
        */
       if (activity != lastActivity) { // this is the first time through following, fill error history with current error
-        Serial << "First time through this case...";
+//        Serial << "First time through this case...";
         errorHistoryIndex = 0;
         lastError = error;
         for (int i = 0; i < numErrors; i++)
@@ -712,7 +746,7 @@ void autoModeCtl() {
       steeringThetaAuto = correctionAngle;
 
       if (frontPoint < (2 * frontDistance) || cornerObstructed) {
-        Serial << "slowing down..";
+//        Serial << "slowing down..";
         driveRAuto = baseSpeed / 2;
       }else {
         driveRAuto = baseSpeed;
@@ -722,7 +756,7 @@ void autoModeCtl() {
       break;
 
     case 1: //pre/post turn straight
-      Serial << "just starting case 1 now...\n";
+//      Serial << "just starting case 1 now...\n";
       //check to see if there is a wall to follow
       /* WARNING: this  return to follow code is copied and re-used
          in several places. Make sure changes are reflected in each place.
@@ -737,7 +771,7 @@ void autoModeCtl() {
         steeringThetaAuto = 0;
         lastActivity = activity;
         activity = 0;
-        Serial.println("returning to wall follow from pre/post turn");
+//        Serial.println("returning to wall follow from pre/post turn");
         break;
       }
 
@@ -763,7 +797,7 @@ void autoModeCtl() {
 
     case 2: //turn towards follow side
 
-      Serial.println("working on a turn towards follow side...");
+//      Serial.println("working on a turn towards follow side...");
 
       //check to see if there is a wall to follow
       /* WARNING: this  return to follow code is copied and re-used
@@ -786,7 +820,7 @@ void autoModeCtl() {
       if (millis() - eventTimer > turnTowardTime) {
         steeringThetaAuto = 0;
         turnCounter = turnCounter + 1;
-        Serial << "Incrementing Turn Counter ... turn counter is now " << turnCounter << '\n';
+//        Serial << "Incrementing Turn Counter ... turn counter is now " << turnCounter << '\n';
         eventTimer = millis();
         straightTime = postTurnTime;
         lastActivity = activity;
@@ -815,9 +849,9 @@ void autoModeCtl() {
       break;
 
     case 3: //turn away from follow side
-      Serial << "Turning away...\n";
+//      Serial << "Turning away...\n";
       if (frontPoint > frontDistance * 1.5) {  // turn until it's clear ahead
-        Serial << "clear ahead, going back to a follow...";
+//        Serial << "clear ahead, going back to a follow...";
         lastActivity = activity;
         activity = 0;
         break;
@@ -847,7 +881,7 @@ void autoModeCtl() {
     break;
 
     default:
-      Serial.println("landed in default case");
+//      Serial.println("landed in default case");
       steeringThetaAuto = 0;
       driveRAuto = 0;
       break;
@@ -855,12 +889,12 @@ void autoModeCtl() {
 }
 
 void autoModeSwitch() {
-  if (!autoMode) { //initialize automode if the arm is home, and we're not already in automode put armhome back in htere
+  if (!autoMode && driveMode==0 ) { //initialize automode only if in normal drive mode
     autoMode = true;
     digitalWrite(autoModeLED, HIGH);
     autoModeTimer = millis();
     //    Serial.println("Automode!");
-  } else if ((start && autoMode) || !controllerConnected()) { //exit automode
+  } else if (autoMode || !controllerConnected()) { //exit automode
     autoMode = false;
     digitalWrite(autoModeLED, LOW);
     //    Serial.println("No Automode!");
@@ -905,11 +939,8 @@ void armCtl() {
       int armMidInit = armMid.readPosition();
       int wristInit = wrist.readPosition();
 
+//      Serial << "Servo Positions\n" << "Base: " << (abs(armBaseInit - armBaseHomePos)) << "\tMid: " << (abs(armMidInit - armMidHomePos)) << "\tWrist: " << (abs(wristInit - wristHomePos)) << '\n';
 
-      Serial << "Servo Positions\n" << "Base: " << (abs(armBaseInit - armBaseHomePos)) << "\tMid: " << (abs(armMidInit - armMidHomePos)) << "\tWrist: " << (abs(wristInit - wristHomePos)) << '\n';
-
-
-      
       if ((abs(armBaseInit - armBaseHomePos) < 20)
           && (abs(armMidInit - armMidHomePos) < 20)
           && (abs(wristInit - wristHomePos) < 20))
@@ -922,13 +953,10 @@ void armCtl() {
     }
   }
   if (armToHome) {
-    Serial << "starting deactivate arm...\n";
     deactivateArm();
   } else if (!armToHome && !armReady && armInitialized) { //test to see if the arm was just activated
-    Serial << "activatin arm\n";
     activateArm();
   } else if (armReady && (millis() - armPrevMillis) > (servoUpdateSpeed * 10)) { //If the arm is active, and ready, enable control. The timer helps keep input speed constant regardless of loop speed
-    Serial << "ArmBaseAngle: " << map(armBaseAngle, -16500, 16500, 0, 1023) << "\tReadPos: " << armBase.readPosition() << '\n';
     if (rtAnalogY != 0) {
       armBaseAngle = armBaseAngle + rtAnalogY / 2;
       //      armMidAngle = armMidAngle - rtAnalogY / 2;
@@ -1071,7 +1099,7 @@ void deactivateArm() {
     int armMidInit = armMid.readPosition();
     int wristInit = wrist.readPosition();
 
-    Serial << "Servo Positions/n" << "Base: " << armBaseInit << "\tMid: " << armMidInit << "\tWrist: " << wristInit << '\n';
+//    Serial << "Servo Positions\n" << "Base: " << armBaseInit << "\tMid: " << armMidInit << "\tWrist: " << wristInit << '\n';
     if ((abs(armBaseInit - armBaseHomePos) < 50)
         && (abs(armMidInit - armMidHomePos) < 30)
         && (abs(wristInit - wristHomePos) < 20))
@@ -1134,14 +1162,14 @@ void activateArm() {
 
   switch (activateStep) {
     case 0:
-      Serial << "Activating Arm Base";
+//      Serial << "Activating Arm Base";
       armBase.setPosition(armBaseReadyPos, 150);
       activateStep = 1;
       break;
 
     case 1:
-      Serial << "Activating Arm Mid\n";
-      Serial << "armBase Error: " << armBase.readPosition() - armBaseReadyPos << '\n';
+//      Serial << "Activating Arm Mid\n";
+//      Serial << "armBase Error: " << armBase.readPosition() - armBaseReadyPos << '\n';
       if (abs(armBase.readPosition() - armBaseReadyPos) < 100 ) {
         armMid.setPosition(armMidReadyPos, 150);
         activateStep = 2;
@@ -1150,7 +1178,7 @@ void activateArm() {
 
     case 2:
       if (abs(armMid.readPosition() - armMidReadyPos) < 25) {
-        Serial << "Activating Wrist:";
+//        Serial << "Activating Wrist:";
         wrist.setPosition(wristReadyPos, 150);
         gripper.setPosition(gripperReadyPos, 150);
         activateStep = 3;
@@ -1159,7 +1187,7 @@ void activateArm() {
 
     case 3:
       if (abs(wrist.readPosition() - wristReadyPos) < 5) {
-      Serial << "Arm is ready";
+//      Serial << "Arm is ready";
         armReady = true;
       }
       break;
