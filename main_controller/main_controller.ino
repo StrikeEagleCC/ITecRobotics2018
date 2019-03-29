@@ -99,7 +99,7 @@ float analogR2Scaler = 1;
 /*~~~~~~~~~~~~~~~~~~~~~~~~ DRIVING SETTINGS ~~~~~~~~~~~~~~~~~~~~~~~~~*/
 const int steeringTrim      = 0.0;   // In radians, negative for left bias, positive for right bias
 unsigned int accelerationTime  = 1000;  //milliseconds to transition from full reverse to full forward. Higher value means slower acceleration (and deceleration)
-const long normalSpeed = 50000;
+const long normalSpeed = 40000;
 const long fastSpeed = 120000;
 const int  crawlSpeed = 10;
 
@@ -144,8 +144,8 @@ const int gripperReadyPos  = 550;
     is the highest. These values can be determined by running the "Servo Position"
     sketch, and watching the serial monitor while manipulating the servos manually.
 */
-const int armBasePosLimit[2]  = {235, 770}; // low and high limits, respectively
-const int armMidPosLimit[2]   = {70, 780};
+const int armBasePosLimit[2]  = {450, 770}; // low and high limits, respectively
+const int armMidPosLimit[2]   = {280, 780};
 const int wristPosLimit[2]    = {267, 1023};
 const int gripperPosLimit[2]  = {75, 550};
 
@@ -1009,7 +1009,8 @@ void getCtlInputs() {
     analogR2btn = PS3. getAnalogButton(R2);
     //    l3 = PS3.getButtonClick(L3);
     //    r3 = PS3.getButtonClick(R3);
-    tri = PS3.getButtonClick(TRIANGLE);
+    //tri = PS3.getButtonClick(TRIANGLE);
+      tri = false; //effectively disable fast mode
     circ = PS3.getButtonClick(CIRCLE);
     cross = PS3.getButtonClick(CROSS);
     sqr = PS3.getButtonClick(SQUARE);
